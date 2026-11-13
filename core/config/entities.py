@@ -22,7 +22,17 @@ IDENTIFIER_PATTERNS = {
     "date": re.compile(rf"\b(?:{MONTHS})\s+\d{{1,2}},\s+\d{{4}}\b"),
 }
 
-NER_LABELS = ("person", "organization", "location", "law", "identifier")
+NER_LABELS = (
+    "person",
+    "organization",
+    "location",
+    "law",
+    "identifier",
+    "title",
+    "concept",
+)
+# What GLiNER is asked for, where a clearer phrase finds more than the stored kind.
+NER_QUERY_LABELS = {"concept": "technical concept"}
 NER_THRESHOLD = 0.5
 DEFAULT_NER_MODEL = "urchade/gliner_small-v2.1"
 # How long a failed GLiNER load is remembered before another ingest may retry
@@ -57,6 +67,29 @@ ENTITY_STOP_WORDS = frozenset(
         "table",
         "report",
         "document",
+        "president",
+        "former president",
+        "the president",
+        "vice president",
+        "secretary",
+        "senator",
+        "congress member",
+        "you",
+        "user",
+        "users",
+        "person",
+        "people",
+        "player",
+        "players",
+        "city",
+        "author",
+        "reader",
+        "they",
+        "them",
+        "this",
+        "that",
+        "these",
+        "those",
     }
 )
 NON_LINKING_KINDS = frozenset({"date"})

@@ -9,6 +9,7 @@ from dataclasses import replace
 from typing import List, Optional, Tuple
 
 from core.services.rag.dtos import (
+    GraphWalkTrace,
     Grounding,
     QueryPlan,
     RetrievalTrace,
@@ -48,6 +49,8 @@ def _entries(chunks: List[RetrievedChunk], prev_ranks=None, use_rerank=False):
                 section=chunk.section or "",
                 via=chunk.via.raw_text if chunk.via is not None else None,
                 via_kind=chunk.via.kind if chunk.via is not None else None,
+                path=chunk.via.path if chunk.via is not None else (),
+                origin=chunk.origin,
             )
         )
     return entries
@@ -70,6 +73,8 @@ def build_trace(
     expand_applied: bool = False,
     final: Optional[List[RetrievedChunk]] = None,
     citation_offset: int = 0,
+    walk: Optional[GraphWalkTrace] = None,
+    stored_facts: int = 0,
 ) -> RetrievalTrace:
     expanded = expanded or []
     pool_ranks = {_key(c): i for i, c in enumerate([*pool, *expanded], 1)}
@@ -88,6 +93,8 @@ def build_trace(
         analysis_error=analysis_error,
         expand_applied=expand_applied,
         expanded=_entries(expanded),
+        walk=walk,
+        stored_facts=stored_facts,
         final=[
             replace(entry, citation_id=f"S{citation_offset + index}")
             for index, entry in enumerate(

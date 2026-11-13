@@ -12,14 +12,21 @@ query analysis, reranking, grounding, and trace capture; failures degrade safely
 
 import logging
 from dataclasses import replace
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from core.helpers.embeddings import EmbeddingClient
 from core.services.rag.assembler import ContextAssembler
 from core.services.rag.config import flag
 from core.services.rag.diversifier import MMRDiversifier
-from core.services.rag.dtos import RetrievalRequest, RetrievalResult, RetrievedChunk
+from core.services.rag.dtos import (
+    GraphWalkTrace,
+    RetrievalRequest,
+    RetrievalResult,
+    RetrievedChunk,
+)
 from core.services.rag.expander import GraphExpander
+from core.services.rag.facts import FactLoader, facts_block
+from core.services.rag.graph_walker import GraphWalker
 from core.services.rag.grounding import GroundingChecker
 from core.services.rag.query_analyzer import QueryAnalyzer
 from core.services.rag.reference_extractor import extract_pointers
@@ -30,6 +37,10 @@ from core.services.rag.trace import build_trace
 logger = logging.getLogger(__name__)
 
 KeepHook = Optional[Callable[[int, RetrievedChunk], None]]
+# Graph evidence adds seats instead of replacing direct hits, so a question
+# routed to the graph can only gain context.
+GRAPH_EVIDENCE_SEATS = 6
+RERANK_BLEND_FLOOR = 0.05
 
 
 class RetrievalPipeline:
@@ -44,6 +55,8 @@ class RetrievalPipeline:
         grounding: Optional[GroundingChecker] = None,
         assembler: Optional[ContextAssembler] = None,
         expander: Optional[GraphExpander] = None,
+        walker: Optional[GraphWalker] = None,
+        fact_loader: Optional[FactLoader] = None,
     ):
         self.retriever = retriever
         self.analyzer = analyzer or QueryAnalyzer()
@@ -52,6 +65,8 @@ class RetrievalPipeline:
         self.grounding = grounding or GroundingChecker()
         self.assembler = assembler or ContextAssembler()
         self.expander = expander
+        self.walker = walker
+        self.fact_loader = fact_loader
 
     def run(
         self, request: RetrievalRequest, on_keep: KeepHook = None
@@ -61,6 +76,7 @@ class RetrievalPipeline:
             request.query,
             request.payer_user_id,
             request.payer_bot_id,
+            request.recent_turns,
         )
         exploratory = bool(plan) and plan.is_exploratory
 
@@ -93,7 +109,45 @@ class RetrievalPipeline:
         # entities shared with another selected file (document path only).
         expanded: List[RetrievedChunk] = []
         expand_applied = False
-        if self.expander is not None and request.file_ids:
+        walk_trace: Optional[GraphWalkTrace] = None
+        connection_note = ""
+        graph_route = (
+            self.walker is not None
+            and bool(request.file_ids)
+            and bool(plan)
+            and plan.wants_graph
+        )
+        result = None
+        if graph_route:
+            try:
+                result = self.walker.walk(
+                    pool,
+                    request.user_id,
+                    request.file_ids,
+                    plan.query_entities,
+                    connect=plan.asks_connection,
+                )
+            except Exception:
+                # The graph only adds context: the turn keeps its search results.
+                logger.exception("Graph walk failed")
+                graph_route = False
+                walk_trace = GraphWalkTrace(
+                    nodes=0, edges=0, milliseconds=0, error="The graph walk failed"
+                )
+        if result is not None:
+            pool = result.pool
+            expanded = [*result.hops]
+            expand_applied = True
+            walk_trace = GraphWalkTrace(
+                nodes=result.nodes,
+                edges=result.edges,
+                milliseconds=result.milliseconds,
+                query_entities=result.query_entities,
+                error=result.error,
+                connections=result.connections,
+            )
+            connection_note = result.connection_note
+        elif self.expander is not None and request.file_ids:
             expanded = self.expander.expand(
                 pool,
                 reranker_on=rerank_on,
@@ -102,6 +156,19 @@ class RetrievalPipeline:
             )
             expand_applied = True
         candidates = [*pool, *expanded]
+
+        # 2c) What the knowledge graph already holds about the names asked
+        # about. A direct question needs it as much as a graph-routed one.
+        fact_note = ""
+        if self.fact_loader is not None and request.file_ids and plan:
+            try:
+                fact_note = facts_block(
+                    self.fact_loader(
+                        request.user_id, request.file_ids, plan.query_entities
+                    )
+                )
+            except Exception:
+                logger.exception("Stored connections could not be loaded")
 
         # 3) Rerank for true relevance (keep a wider set if MMR will trim further).
         # The cross-encoder scores every direct hit and graph hop before the
@@ -118,8 +185,15 @@ class RetrievalPipeline:
         # discarded candidate from evicting useful evidence.
         ranked_candidates = reranked
         reranked = ranked_candidates[:working_k]
-        direct = [chunk for chunk in ranked_candidates if chunk.via is None]
-        hops = [chunk for chunk in ranked_candidates if chunk.via is not None]
+        if graph_route:
+            searched = {(c.file_id, c.chunk_index) for c in pool}
+            direct = [
+                c for c in ranked_candidates if (c.file_id, c.chunk_index) in searched
+            ]
+            hops = []
+        else:
+            direct = [chunk for chunk in ranked_candidates if chunk.via is None]
+            hops = [chunk for chunk in ranked_candidates if chunk.via is not None]
         mmr_applied = (
             exploratory
             and bool(query_vector)
@@ -132,13 +206,28 @@ class RetrievalPipeline:
             )
         else:
             picked = direct[: request.top_k]
-        final = self._merge_hops(
-            request.query,
-            picked,
-            hops,
-            request.top_k,
-            rerank_applied=rerank_applied,
-        )
+        if graph_route:
+            final = self._append_graph_evidence(picked, ranked_candidates, searched)
+        else:
+            final = self._merge_hops(
+                request.query,
+                picked,
+                hops,
+                request.top_k,
+                rerank_applied=rerank_applied,
+            )
+            chosen = {(c.file_id, c.chunk_index) for c in direct}
+            final = [
+                replace(
+                    chunk,
+                    origin=(
+                        "search"
+                        if (chunk.file_id, chunk.chunk_index) in chosen
+                        else "graph_only"
+                    ),
+                )
+                for chunk in final
+            ]
 
         # 5) Assemble cited, budget-bounded context.
         kept = []
@@ -163,7 +252,12 @@ class RetrievalPipeline:
             if rerank_applied
             else None
         )
-        blocks = ContextAssembler.grounding_blocks(grounding) + blocks
+        blocks = [
+            *ContextAssembler.grounding_blocks(grounding),
+            *([connection_note] if connection_note else []),
+            *([fact_note] if fact_note else []),
+            *blocks,
+        ]
 
         # 7) Per-stage trace for the UI.
         trace = None
@@ -184,10 +278,19 @@ class RetrievalPipeline:
                 grounding=grounding,
                 grounding_threshold=grounding_threshold,
                 final_size=len(final),
-                expanded=expanded,
+                expanded=(
+                    sorted(
+                        (c for c in ranked_candidates if c.graph_score is not None),
+                        key=lambda chunk: -chunk.graph_score,
+                    )
+                    if graph_route
+                    else expanded
+                ),
                 expand_applied=expand_applied,
                 final=final,
                 citation_offset=citation_offset,
+                walk=walk_trace,
+                stored_facts=fact_note.count("\n- "),
             )
 
         return RetrievalResult(
@@ -248,6 +351,47 @@ class RetrievalPipeline:
             if index not in moved:
                 emit(index)
         return ordered
+
+    @staticmethod
+    def _append_graph_evidence(
+        picked: List[RetrievedChunk],
+        ranked: List[RetrievedChunk],
+        searched: Set[Tuple[str, int]],
+    ) -> List[RetrievedChunk]:
+        """The chunks the walk scored highest, seated after the direct evidence.
+
+        Both signals count. PageRank says the chunk is connected, the reranker
+        says it is on topic. The floor keeps a good bridge chunk that does not
+        resemble the question, which is the reason the walk exists. A chunk that
+        shows how two named things connect goes first, since it answers the question.
+        """
+        taken = {(c.file_id, c.chunk_index) for c in picked}
+        linked = sorted(
+            (
+                chunk
+                for chunk in ranked
+                if chunk.graph_score is not None
+                and (chunk.file_id, chunk.chunk_index) not in taken
+            ),
+            key=lambda chunk: (
+                not chunk.bridge,
+                -chunk.graph_score * (RERANK_BLEND_FLOOR + (chunk.rerank_score or 0.0)),
+            ),
+        )
+        return [
+            *(replace(chunk, origin="search") for chunk in picked),
+            *(
+                replace(
+                    chunk,
+                    origin=(
+                        "graph_ranked"
+                        if (chunk.file_id, chunk.chunk_index) in searched
+                        else "graph_only"
+                    ),
+                )
+                for chunk in linked[:GRAPH_EVIDENCE_SEATS]
+            ),
+        ]
 
     @classmethod
     def _merge_hops(
@@ -359,6 +503,24 @@ def _load_entity_hops(keys, user_id, file_ids):
     return DocumentMapService.load_entity_hops(keys, user_id, file_ids)
 
 
+def _load_facts(user_id, file_ids, names):
+    # Local import: the loader pulls in Django models at import time.
+    from knowledge_graph.services.fact_loader import load_facts
+
+    return load_facts(user_id, file_ids, names)
+
+
+def _graph_walker() -> GraphWalker:
+    # Local import: the loader pulls in Django models at import time.
+    from knowledge_graph.services.walk_loader import (
+        load_walk_chunks,
+        load_walk_graph,
+        resolve_query_entities,
+    )
+
+    return GraphWalker(load_walk_graph, resolve_query_entities, load_walk_chunks)
+
+
 def build_pipeline(
     source_type: str = "library", openai_client: Optional[EmbeddingClient] = None
 ) -> RetrievalPipeline:
@@ -371,6 +533,10 @@ def build_pipeline(
                 _load_entity_hops if flag("RAG_ENTITY_HOPS_ENABLED", True) else None
             ),
         )
+    graph_on = source_type == "document" and flag("RAG_GRAPH_WALK_ENABLED", True)
     return RetrievalPipeline(
-        retriever=get_retriever(source_type, openai_client), expander=expander
+        retriever=get_retriever(source_type, openai_client),
+        expander=expander,
+        walker=_graph_walker() if graph_on else None,
+        fact_loader=_load_facts if graph_on else None,
     )

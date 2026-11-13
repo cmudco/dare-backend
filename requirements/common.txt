@@ -99,6 +99,9 @@ transformers==5.8.1
 # transformers stack the reranker already needs. sentencepiece and onnxruntime
 # below are its runtime dependencies.
 gliner==0.2.28
+# Personalized PageRank for the knowledge graph walk; pagerank needs scipy.
+networkx==3.6.1
+scipy==1.18.0
 sentencepiece==0.2.2
 onnxruntime==1.29.0
 

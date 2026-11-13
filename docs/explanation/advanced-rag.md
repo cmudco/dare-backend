@@ -268,6 +268,38 @@ heading and heading path (`DocumentChunk`).
   running, `RAG_ENTITY_MODEL` picks the checkpoint (loaded lazily on first use), and
   `RAG_ENTITY_HOPS_ENABLED` turns off the cross-file hop without touching ingest.
 
+## 10. Knowledge graphs and the graph walk
+
+The graph adds identity and multi-step reach on top of the document map. Most of it is free.
+
+**Upload (free).** GLiNER adds `title` and `concept` to the entity kinds, and
+`knowledge_graph/domain/alias_rules.py` merges names that need no judgement: reordered names,
+`President Nixon` with `Richard Nixon`, a surname one person owns, and exact initials like `NSC`.
+A surname two people share stays apart. Membership lives in `ClusterAlias` at key level, so it
+survives the delete-and-recreate of `DocumentEntity` rows on every reprocess.
+
+**Question (one existing LLM call).** `QueryAnalyzer` also returns `route` and `query_entities`.
+`direct` keeps the one-hop expand. `graph` runs `GraphWalker`: Personalized PageRank over chunks
+and entities with `networkx`, seeded from the search pool and the named entities. An entity linked
+to many chunks passes little to each, so rare links count for more without another rule. Linked
+chunks add up to `GRAPH_EVIDENCE_SEATS` seats and never replace direct evidence.
+
+**Stated relationships (optional, paid, user approved).** A `KnowledgeGraph` holds a capped list
+of `RelationLabel`s. The background model suggests them by returning add, rename, and remove
+operations against the current list; `apply_label_operations` enforces the cap and leaves
+user-added labels alone. The OpenAI Decisions API then labels each entity pair in a sentence, and
+a second question checks that the passage itself says so, which filters outside knowledge. No
+OpenAI key or a LiteLLM wallet disables only this step. Everything above still works.
+
+**Stored connections in chat.** On both routes `facts_block` (`core/services/rag/facts.py`) renders
+the stored relationships about `query_entities` as a `[stored connections]` context block, loaded by
+`knowledge_graph/services/fact_loader.py`. A failure in the walk or the loader is logged and the
+turn keeps its search results.
+
+**Measuring it.** `python manage.py graph_eval <graph id> <questions.json>` runs a frozen question
+set four ways, spending real tokens, and stores the raw answers on the graph. The file is a list of
+`{id, kind, question, expected, must_include, gold_files}` rows written for that graph's files.
+
 ### Evidence-integrity fixes (September 2026)
 
 Agentic `search_documents` calls the same Advanced RAG helpers, including the

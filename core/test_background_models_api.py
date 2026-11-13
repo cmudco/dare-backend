@@ -43,7 +43,7 @@ class BackgroundModelsApiTests(TestCase):
         self.assertEqual(data["walletType"], UserWalletPreferenceTypeChoice.DARE)
         self.assertEqual(
             {task["task"] for task in data["tasks"]},
-            {"titles", "summaries", "memory", "query_analysis"},
+            {"titles", "summaries", "memory", "query_analysis", "graph_relations"},
         )
         for task in data["tasks"]:
             self.assertEqual(task["modelIdentifier"], "gpt-5.6-luna")

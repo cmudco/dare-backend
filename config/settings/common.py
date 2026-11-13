@@ -79,6 +79,7 @@ LOCAL_APPS = [
     "research",
     "libraries",
     "projects",
+    "knowledge_graph",
     "assistant",
     "release_notes",
 ]

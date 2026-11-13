@@ -1,0 +1,270 @@
+"""Pure selection of the entity pairs one passage could state a relationship about."""
+
+import re
+from collections import Counter
+from dataclasses import dataclass
+from itertools import combinations
+from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
+
+from knowledge_graph.constants import MAX_QUOTE_CHARS, QUOTE_CONTEXT_CHARS
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n{2,}")
+
+
+@dataclass(frozen=True)
+class PairMention:
+    cluster_id: int
+    text: str
+
+
+@dataclass(frozen=True)
+class CandidatePair:
+    a: PairMention
+    b: PairMention
+    sentence: str
+    # One side is the person the file is about, referred to as "I" or "his wife".
+    implied: bool = False
+
+
+def split_sentences(text: str) -> List[str]:
+    return [part.strip() for part in _SENTENCE_END.split(text or "") if part.strip()]
+
+
+def _found_in(sentence: str, mention: PairMention) -> bool:
+    pattern = r"(?<!\w)" + re.escape(mention.text) + r"(?!\w)"
+    return re.search(pattern, sentence, flags=re.IGNORECASE) is not None
+
+
+def candidate_pairs(
+    text: str, mentions: Iterable[PairMention], limit: int
+) -> List[CandidatePair]:
+    """Entities named in the same sentence, or the next one, closest first.
+
+    A relationship has to be stated somewhere, so entities that only share a
+    long passage are not worth a paid question.
+    """
+    sentences = split_sentences(text)
+    unique = {(m.cluster_id, m.text.lower()): m for m in mentions}
+    by_sentence: List[Dict[int, PairMention]] = []
+    for sentence in sentences:
+        present: Dict[int, PairMention] = {}
+        for mention in unique.values():
+            if _found_in(sentence, mention):
+                present.setdefault(mention.cluster_id, mention)
+        by_sentence.append(present)
+
+    pairs: Dict[Tuple[int, int], CandidatePair] = {}
+    for window in (0, 1):
+        for index, present in enumerate(by_sentence):
+            neighbour = index + window
+            if neighbour >= len(by_sentence):
+                continue
+            evidence = " ".join(sentences[index : neighbour + 1])
+            _collect(pairs, present, by_sentence[neighbour], evidence)
+    return list(pairs.values())[:limit]
+
+
+_SPEAKING = re.compile(r"\b(?:I|[Mm]y|[Mm]e|[Mm]yself)\b")
+_THEIR_RELATIVE = re.compile(
+    r"\b(?:[Hh]is|[Hh]er)\s+(?:\w+\s+)?(?:wife|husband|father|mother|son|daughter|"
+    r"brother|sister|master|mistress|owner|comrade|widow|child|children|parents?)\b"
+)
+
+
+_APPEARED = re.compile(
+    r"(?i:personally (?:came and )?appeared(?: before me)?)[\s,.…:]*"
+    r"((?:[A-Z][\w.'-]*\.?\s+){0,3}[A-Z][\w'-]+)"
+)
+
+
+def opening_speaker(text: str, people: Sequence[PairMention]) -> Optional[PairMention]:
+    """Who a sworn statement opening in this chunk belongs to, if it names one.
+
+    Depositions open with "Personally appeared Robert Goodwin ... being duly sworn"
+    and then speak as "I" for pages, long after the name has scrolled away.
+    """
+    for match in _APPEARED.finditer(text or ""):
+        named = match.group(1).lower()
+        for person in people:
+            if person.text.lower() in named or named in person.text.lower():
+                return person
+    return None
+
+
+def implied_pairs(
+    text: str,
+    subject: PairMention,
+    mentions: Iterable[PairMention],
+    taken: Iterable[CandidatePair],
+    limit: int,
+) -> List[CandidatePair]:
+    """Pairs a sentence states without naming its subject.
+
+    "My master was Franklin Talbert" names one person, so the sentence rule never
+    asks about it, yet in a testimony or letter it is the main thing being said.
+    """
+    asked = {frozenset((pair.a.cluster_id, pair.b.cluster_id)) for pair in taken}
+    unique = {(m.cluster_id, m.text.lower()): m for m in mentions}
+    found: List[CandidatePair] = []
+    sentences = split_sentences(text)
+    for index, sentence in enumerate(sentences):
+        if not (_SPEAKING.search(sentence) or _THEIR_RELATIVE.search(sentence)):
+            continue
+        window = " ".join(sentences[index : index + 2])
+        for mention in unique.values():
+            slot = frozenset((subject.cluster_id, mention.cluster_id))
+            if (
+                mention.cluster_id != subject.cluster_id
+                and slot not in asked
+                and _found_in(window, mention)
+            ):
+                asked.add(slot)
+                first, second = sorted(
+                    (subject, mention), key=lambda item: item.cluster_id
+                )
+                found.append(CandidatePair(first, second, window, implied=True))
+                if len(found) >= limit:
+                    return found
+    return found
+
+
+def strong_pairs(
+    people_by_chunk: Iterable[Iterable[int]], min_chunks: int
+) -> FrozenSet[FrozenSet[int]]:
+    """People named together in at least ``min_chunks`` chunks."""
+    together: Counter = Counter()
+    for people in people_by_chunk:
+        for a, b in combinations(sorted(set(people)), 2):
+            together[frozenset((a, b))] += 1
+    return frozenset(pair for pair, count in together.items() if count >= min_chunks)
+
+
+def reach_pairs(
+    text: str,
+    people: Iterable[PairMention],
+    strong: FrozenSet[FrozenSet[int]],
+    taken: Iterable[CandidatePair],
+    limit: int,
+) -> List[CandidatePair]:
+    """Strong pairs this chunk names anywhere, not just a sentence apart.
+
+    Forms put an examiner and a claimant paragraphs apart, so the sentence rule
+    never asks about the people who appear together most.
+    """
+    asked = {frozenset((pair.a.cluster_id, pair.b.cluster_id)) for pair in taken}
+    unique: Dict[int, PairMention] = {}
+    for person in people:
+        if _found_in(text, person):
+            unique.setdefault(person.cluster_id, person)
+    found: List[CandidatePair] = []
+    for a, b in combinations(_sorted(unique), 2):
+        slot = frozenset((a.cluster_id, b.cluster_id))
+        if slot in strong and slot not in asked:
+            found.append(CandidatePair(a, b, pair_excerpt(text, (a.text, b.text))))
+            if len(found) >= limit:
+                break
+    return found
+
+
+def pair_excerpt(text: str, names: Sequence[str]) -> str:
+    """Each name with a little context, joined, for two names far apart."""
+    text = " ".join(text.split())
+    spans = [span for span in (_name_span(text, name) for name in names) if span]
+    merged: List[List[int]] = []
+    for begin, end in sorted(spans):
+        begin = max(begin - QUOTE_CONTEXT_CHARS, 0)
+        end = min(end + QUOTE_CONTEXT_CHARS, len(text))
+        if merged and begin <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([begin, end])
+    return " … ".join(text[begin:end] for begin, end in merged) or trim_quote(
+        text, names
+    )
+
+
+def _collect(
+    pairs: Dict[Tuple[int, int], CandidatePair],
+    left: Dict[int, PairMention],
+    right: Dict[int, PairMention],
+    evidence: str,
+) -> None:
+    for a in _sorted(left):
+        for b in _sorted(right):
+            if a.cluster_id == b.cluster_id:
+                continue
+            slot = tuple(sorted((a.cluster_id, b.cluster_id)))
+            if slot in pairs:
+                continue
+            first, second = (a, b) if a.cluster_id == slot[0] else (b, a)
+            pairs[slot] = CandidatePair(a=first, b=second, sentence=evidence)
+
+
+def _sorted(mentions: Dict[int, PairMention]) -> Sequence[PairMention]:
+    return [mentions[key] for key in sorted(mentions)]
+
+
+def _surname_in(window: str, mention: PairMention) -> bool:
+    words = re.findall(r"\w+", mention.text)
+    return bool(words) and _found_in(window, PairMention(0, words[-1]))
+
+
+def stating_text(text: str, pair: CandidatePair, label: str) -> str:
+    """The sentence that states the fact, not just the first naming both sides.
+
+    Two names can share a sentence that says nothing about them, so one using the
+    relationship's own word wins. Otherwise the pair's own sentence stands, because
+    the source often picks another verb ("named" for appointed).
+    """
+    word = label.split("_")[0]
+    stem = re.compile(r"(?<!\w)" + re.escape(word[: max(4, len(word) - 3)]), re.I)
+    names = (pair.a.text, pair.b.text)
+    for sentence in split_sentences(text):
+        if (
+            stem.search(sentence)
+            and _surname_in(sentence, pair.a)
+            and _surname_in(sentence, pair.b)
+        ):
+            return trim_quote(sentence, names)
+    return trim_quote(pair.sentence, names)
+
+
+def _name_span(text: str, name: str) -> Optional[Tuple[int, int]]:
+    words = re.findall(r"\w+", name)
+    # The full name first; a surname alone still places "Mrs. Fields".
+    for word in (name, words[-1] if words else ""):
+        found = word and re.search(
+            r"(?<!\w)" + re.escape(word) + r"(?!\w)", text, re.IGNORECASE
+        )
+        if found:
+            return found.span()
+    return None
+
+
+def names_found(text: str, names: Sequence[str]) -> int:
+    """How many of the names a quote shows, so a self-explaining quote can lead."""
+    return sum(1 for name in names if _name_span(text, name))
+
+
+def trim_quote(text: str, names: Sequence[str]) -> str:
+    """The stretch of a long quote around the named sides.
+
+    Forms have few sentence breaks, so one "sentence" can be a whole page whose
+    first lines are a printed header.
+    """
+    text = " ".join(text.split())
+    if len(text) <= MAX_QUOTE_CHARS:
+        return text
+    spans = [span for span in (_name_span(text, name) for name in names) if span]
+    if not spans:
+        return text[:MAX_QUOTE_CHARS].rsplit(" ", 1)[0] + " …"
+    start = max(min(begin for begin, _ in spans) - QUOTE_CONTEXT_CHARS, 0)
+    end = min(max(finish for _, finish in spans) + QUOTE_CONTEXT_CHARS, len(text))
+    if start > 0:
+        start = text.find(" ", start) + 1 or start
+    if end < len(text):
+        cut = text.rfind(" ", start, end)
+        end = cut if cut > start else end
+    prefix = "… " if start > 0 else ""
+    suffix = " …" if end < len(text) else ""
+    return prefix + text[start:end] + suffix

@@ -17,7 +17,7 @@ from core.services.rag.pipeline import RetrievalPipeline, build_pipeline
 class FakeAnalyzer:
     last_error = None
 
-    def analyze(self, query, payer_user_id, payer_bot_id):
+    def analyze(self, query, payer_user_id, payer_bot_id, recent_turns=()):
         return None
 
     def use_hyde(self):
@@ -27,7 +27,7 @@ class FakeAnalyzer:
 class ExploratoryAnalyzer:
     last_error = None
 
-    def analyze(self, query, payer_user_id, payer_bot_id):
+    def analyze(self, query, payer_user_id, payer_bot_id, recent_turns=()):
         return QueryPlan(intent="exploratory")
 
     def use_hyde(self):
