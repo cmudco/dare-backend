@@ -13,6 +13,12 @@ from users.managers import UserManager
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice, AccessCodeProvisionerChoice
 from prompts.models import Prompt
 from api_keys.constants import BillingModeChoice
+from users.access_request_models import (  # noqa: F401
+    AccessRequest,
+    AccessRequestDecision,
+    AccessRequestDelivery,
+    AccessRequestPolicy,
+)
 
 
 class AccessCodeGroup(TimeStampMixin):
@@ -135,12 +141,16 @@ class AccessCodeGroup(TimeStampMixin):
         return self.is_active and self.current_usage < self.max_capacity and not self.is_expired
 
     def use_code(self):
-        """Increment usage count when code is used"""
-        if self.is_available:
-            self.current_usage += 1
-            self.save(update_fields=['current_usage'])
-            return True
-        return False
+        """Atomically consume one available registration slot."""
+        available = AccessCodeGroup.objects.filter(
+            pk=self.pk, is_active=True, current_usage__lt=models.F("max_capacity")
+        ).filter(
+            models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=timezone.now())
+        )
+        used = available.update(current_usage=models.F("current_usage") + 1)
+        if used:
+            self.refresh_from_db(fields=["current_usage"])
+        return bool(used)
 
     def deactivate_all_users(self):
         """Deactivate all users associated with this access code group"""

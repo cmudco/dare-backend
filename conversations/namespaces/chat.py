@@ -34,6 +34,7 @@ from conversations.services.message_validation_service import MessageValidationS
 from conversations.services.audio_transcription_service import AudioTranscriptionService
 from conversations.services.websocket_response_service import WebSocketResponseService
 from conversations.namespaces.utils import detect_platform_from_socketio_environ
+from users.models import User
 from users.sso import user_for_access_token
 from core.services.conversation_service import ConversationService
 
@@ -63,6 +64,20 @@ class ChatNamespace(socketio.AsyncNamespace):
         self.coordinators: Dict[str, MessageCoordinator] = {}
 
     # ==================== Connection Lifecycle ====================
+
+    async def trigger_event(self, event, *args):
+        if event not in {'connect', 'disconnect'} and args:
+            session = self.sessions.get(args[0])
+            if session and session.get('user'):
+                active = await sync_to_async(db_reconnect_on_stale)(
+                    User.objects.filter(
+                        pk=session['user'].pk, is_active=True, is_deleted=False
+                    ).exists
+                )
+                if not active:
+                    await sio.disconnect(args[0], namespace=self.namespace)
+                    return {'error': 'Account inactive or unavailable'}
+        return await super().trigger_event(event, *args)
 
     async def on_connect(self, sid: str, environ: dict, auth: Optional[dict] = None):
         """
@@ -111,7 +126,7 @@ class ChatNamespace(socketio.AsyncNamespace):
     async def _connect_with_jwt(self, sid: str, environ: dict, token: str) -> bool:
         """Handle JWT-based authentication for authenticated users."""
         user = await self._get_user(token)
-        if not user:
+        if not user or not user.is_active or user.is_deleted:
             raise socketio.exceptions.ConnectionRefusedError('Invalid or expired token')
 
         # Detect platform from Origin/Referer headers

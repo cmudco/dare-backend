@@ -34,5 +34,21 @@ def send_email_via_resend(
             "text": email_message.body,
         }
 
+    if email_message.cc:
+        params["cc"] = email_message.cc
+    if email_message.bcc:
+        params["bcc"] = email_message.bcc
+
+    reply_to = email_message.reply_to or next(
+        (
+            value
+            for key, value in email_message.extra_headers.items()
+            if key.lower() == "reply-to"
+        ),
+        None,
+    )
+    if reply_to:
+        params["reply_to"] = reply_to
+
     response = resend.Emails.send(params)
     return response
