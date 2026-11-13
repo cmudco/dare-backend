@@ -29,6 +29,12 @@ from memory.models import (
 )
 from memory.services import consolidation
 from memory.services.edit import edit_doc_line, edit_record
+from memory.services.forget import (
+    CLEAR_REASON,
+    FORGET_REASON,
+    erase_memory,
+    leave_tombstones,
+)
 from memory.services.items import (
     DOC_ID_PREFIX,
     doc_line_id,
@@ -136,15 +142,13 @@ def forget_item(user, item_id: str) -> None:
         raise MemoryNotFound
 
     with transaction.atomic():
-        record.soft_delete()
+        erase_memory(user, record)
         record_event(
             user,
             LedgerEvent(
                 action=WriterAction.FORGET,
-                reason="The user asked for this memory to be forgotten.",
+                reason=FORGET_REASON,
                 applied=True,
-                record=record,
-                detail=record.text,
             ),
         )
 
@@ -169,7 +173,7 @@ def _forget_doc_line(user, item_id: str) -> None:
                         action=WriterAction.FORGET,
                         reason="The user removed a USER.md line.",
                         applied=True,
-                        detail=f"[{key}] {line}",
+                        detail=f"[{key}]",
                     ),
                 )
             return
@@ -203,6 +207,7 @@ def clear_store(user) -> Dict[str, Any]:
         raise MemoryConflict("Wait for memory building to finish before clearing it.")
 
     with transaction.atomic():
+        leave_tombstones(user, MemoryRecord.objects.filter(user=user), CLEAR_REASON)
         records, _ = MemoryRecord.objects.filter(user=user).delete()
         MemoryLedgerEntry.objects.filter(user=user).delete()
         UserMemoryDocument.objects.filter(user=user).update(content="")
