@@ -125,6 +125,171 @@ def record_memory(
     )
 
 
+_KEPT, _RESHAPED, _STAYS, _ADDED = "kept", "reshaped", "stays", "added"
+
+
+def field_map(
+    row: MemoryRow,
+    memory: Dict[str, Any],
+    *,
+    imported: bool,
+    has_embedding: bool,
+    updated_at: str,
+) -> List[Dict[str, Any]]:
+    """How each thing DARE holds about a memory travels in its OMP record.
+
+    One entry per DARE field: the record fields it lands in, and whether it
+    is kept, reshaped, or stays here. Record fields with no source in the row
+    are listed as added.
+    """
+
+    def entry(label, value, targets, how, note):
+        return {
+            "label": label,
+            "value": "" if value is None else str(value),
+            "omp": [target for target in targets if target in memory],
+            "how": how,
+            "note": note,
+        }
+
+    in_dare = "No standard field yet, so it travels in DARE's own section."
+    entries = [
+        entry("text", row.text, ["body"], _KEPT, "The memory itself, word for word."),
+        entry("state", row.state, ["status"], _KEPT, "Active or held."),
+    ]
+    if imported:
+        entries += [
+            entry(
+                "id",
+                row.id,
+                ["identifier", "x_omp_origin"],
+                _RESHAPED,
+                "DARE keeps its own id and sends the identity its origin gave it.",
+            ),
+            entry(
+                "change log",
+                "import, release, edits",
+                ["provenance"],
+                _RESHAPED,
+                "DARE adds its own steps to the list the origin sent.",
+            ),
+            entry(
+                "original record",
+                "kept exactly as it arrived",
+                sorted(
+                    set(memory)
+                    - {"body", "status", "identifier", "x_omp_origin", "provenance"}
+                ),
+                _KEPT,
+                "Fields DARE does not use are passed on untouched.",
+            ),
+        ]
+    else:
+        folder = _FOLDERS[row.kind]
+        candidates = [
+            ("id", row.id, ["identifier"], _KEPT, "With the origin, its identity."),
+            ("kind", row.kind, ["tags"], _RESHAPED, "A fact or a rule becomes a tag."),
+            (
+                "key",
+                row.key,
+                ["path"],
+                _RESHAPED,
+                f"Becomes a folder-style path under {folder}/.",
+            ),
+            (
+                "applies when",
+                row.applies_when,
+                ["attributes"],
+                _KEPT,
+                in_dare,
+            ),
+            ("importance", row.importance, ["weight"], _KEPT, "Same number."),
+            ("confidence", row.confidence, ["attributes"], _KEPT, in_dare),
+            (
+                "sensitivity",
+                row.sensitivity,
+                ["tags"] if row.sensitivity != Sensitivity.NONE else ["attributes"],
+                _RESHAPED,
+                "A health, safety or third-party label becomes a tag.",
+            ),
+            (
+                "source sentence",
+                row.provenance,
+                ["evidence"],
+                _RESHAPED,
+                "What you said that it was learned from. OMP calls this evidence.",
+            ),
+            (
+                "source chat",
+                "conversation" if row.source_conversation_id else "",
+                ["evidence"],
+                _RESHAPED,
+                "Sent as a reference only. The chat itself stays in DARE.",
+            ),
+            (
+                "change log",
+                "who wrote, edited, approved",
+                ["provenance"],
+                _RESHAPED,
+                "Built from DARE's log of every change to this memory.",
+            ),
+            ("remembered", row.created_at, ["created_at"], _KEPT, "Same moment."),
+            ("updated", updated_at, ["updated_at"], _KEPT, "Same moment."),
+            (
+                "true from",
+                row.valid_from,
+                ["valid_from"],
+                _RESHAPED,
+                "A day becomes a UTC timestamp.",
+            ),
+            (
+                "true until",
+                row.valid_until,
+                ["valid_until"],
+                _RESHAPED,
+                "A day becomes a UTC timestamp.",
+            ),
+            ("happened on", row.occurred_at, ["attributes"], _KEPT, in_dare),
+            ("pinned to", row.pinned_to, ["attributes"], _KEPT, in_dare),
+            (
+                "replaces",
+                row.replaces,
+                ["links"],
+                _RESHAPED,
+                "The memory it replaced becomes a supersedes link.",
+            ),
+            (
+                "owner",
+                "your account",
+                ["scope"],
+                _RESHAPED,
+                "Becomes an opaque id. Your email never leaves.",
+            ),
+        ]
+        entries += [
+            entry(*candidate)
+            for candidate in candidates
+            if candidate[1] not in (None, "") and set(candidate[2]) & set(memory)
+        ]
+    if has_embedding:
+        entries.append(
+            entry(
+                "search vector",
+                "embedding",
+                [],
+                _STAYS,
+                "Stays in DARE. A receiver builds its own.",
+            )
+        )
+    sourced = {target for item in entries for target in item["omp"]}
+    entries += [
+        entry("", "", [name], _ADDED, "Added so any system can read the record.")
+        for name in memory
+        if name not in sourced
+    ]
+    return entries
+
+
 def forwarded_memory(
     raw: Dict[str, Any],
     *,

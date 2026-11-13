@@ -3,7 +3,7 @@
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from memory.constants import OMP_WITHHELD_SENSITIVITIES, MemoryState, WriterAction
 from memory.domain import omp
@@ -16,6 +16,7 @@ from memory.models import (
     MemoryTombstone,
     UserMemoryDocument,
 )
+from memory.services.forget import exchange_identities
 from memory.services.store import row_from_record
 
 
@@ -136,6 +137,35 @@ def export_archive(user, *, include_sensitive: bool = False) -> Dict[str, Any]:
             )
         ],
     }
+
+
+def export_record(user, record_id: str) -> Optional[Dict[str, Any]]:
+    """One memory as it would travel, or None when it would not be exported."""
+    record = MemoryRecord.visible(user).filter(pk=record_id).first()
+    if record is None:
+        return None
+    ((origin, identifier),) = exchange_identities(user, [record])
+    archive = export_archive(user, include_sensitive=True)
+    for memory in archive["memories"]:
+        if (
+            memory["identifier"] == identifier
+            and memory.get("x_omp_origin", archive["manifest"]["origin"]) == origin
+        ):
+            return {
+                "origin": origin,
+                "manifest": archive["manifest"],
+                "memory": memory,
+                "fields": omp.field_map(
+                    row_from_record(record),
+                    memory,
+                    imported=MemoryImportedRecord.objects.filter(
+                        record=record
+                    ).exists(),
+                    has_embedding=record.embedding is not None,
+                    updated_at=record.updated_at.isoformat(),
+                ),
+            }
+    return None
 
 
 def _withheld(record: MemoryRecord) -> bool:

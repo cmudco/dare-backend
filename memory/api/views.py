@@ -177,6 +177,13 @@ class MemoryViewSet(viewsets.ViewSet):
             )
         )
 
+    @extend_schema(summary="One memory as its Open Memory Protocol record")
+    def omp_record(self, request, record_id):
+        payload = omp_export.export_record(request.user, str(record_id))
+        if payload is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(payload)
+
     @extend_schema(
         summary="Import an Open Memory Protocol archive",
         responses={201: MemoryImportRunSerializer},

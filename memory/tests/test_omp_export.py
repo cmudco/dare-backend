@@ -154,5 +154,30 @@ class OmpExportApiTests(TestCase):
         self.assertEqual(memory["media_type"], "text/plain")
         self.assertIn("exported_at", response.json()["manifest"])
 
+    def test_one_memory_can_be_read_as_its_record(self):
+        user = get_user_model().objects.create_user(
+            email="omp-one@example.com", password="x"
+        )
+        record = MemoryRecord.objects.create(
+            user=user, kind="fact", key="diet", text="They are vegetarian."
+        )
+        stranger = get_user_model().objects.create_user(
+            email="omp-stranger@example.com", password="x"
+        )
+        client = APIClient()
+        client.force_authenticate(user)
+        url = f"/api/memory/v2/omp/records/{record.id}/"
+
+        response = client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["memory"]["body"], "They are vegetarian.")
+        self.assertEqual(response.json()["memory"]["identifier"], str(record.id))
+        fields = {field["label"]: field for field in response.json()["fields"]}
+        self.assertEqual(fields["text"]["omp"], ["body"])
+        self.assertEqual(fields["key"]["how"], "reshaped")
+        client.force_authenticate(stranger)
+        self.assertEqual(client.get(url).status_code, 404)
+
     def test_signing_in_is_required(self):
         self.assertEqual(APIClient().get(URL).status_code, 401)

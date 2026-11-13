@@ -58,6 +58,11 @@ urlpatterns = [
         name="memory-v2-omp-export",
     ),
     path(
+        "v2/omp/records/<uuid:record_id>/",
+        MemoryViewSet.as_view({"get": "omp_record"}, renderer_classes=[JSONRenderer]),
+        name="memory-v2-omp-record",
+    ),
+    path(
         "v2/omp/import/",
         # The file's own field names must arrive untouched, so this route
         # skips the global camel-case parser.
