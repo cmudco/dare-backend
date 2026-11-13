@@ -16,7 +16,13 @@ WORKDIR /app
 
 COPY requirements/ requirements/
 
-RUN pip install --no-cache-dir --prefix=/install -r requirements/prod.txt
+# PyPI's Linux torch wheel bundles ~2.7 GB of CUDA; pip prefers the +cpu build from this
+# index. GPU hosts: --build-arg TORCH_INDEX_URL=https://pypi.org/simple
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
+RUN pip install --no-cache-dir --prefix=/install \
+    --extra-index-url ${TORCH_INDEX_URL} \
+    -r requirements/prod.txt
 
 # ============================================
 # Stage 2: Runtime — the actual image that runs
