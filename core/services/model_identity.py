@@ -103,7 +103,7 @@ _VISION_PATTERNS: Tuple[re.Pattern, ...] = (
     re.compile(r"(?:^|-)gpt-(?:4o|4\.1|4-turbo|5|6)(?:[.-]|$)"),
     re.compile(r"(?:^|-)(?:o1|o3|o4-mini)(?:-pro)?(?:-|$)"),
     re.compile(r"(?:^|-)claude-(?:3|opus|sonnet|haiku|fable|mythos)(?:[.-]|$)"),
-    re.compile(r"(?:^|-)gemini-(?:1\.5|2|3)(?:[.-]|$)"),
+    re.compile(r"(?:^|-)gemini-(?:1\.5|2|3|4)(?:[.-]|$)"),
     re.compile(r"(?:^|-)pixtral"),
     re.compile(r"(?:^|-)llama-?4(?:[.-]|$)"),
     re.compile(r"qwen.*-vl"),
