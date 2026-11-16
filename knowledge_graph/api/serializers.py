@@ -27,10 +27,17 @@ class GraphUpdateSerializer(serializers.Serializer):
     description = serializers.CharField(
         max_length=500, required=False, allow_blank=True
     )
+    file_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1), max_length=500, required=False
+    )
+    folder_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1), max_length=100, required=False
+    )
 
 
 class ApproveSerializer(serializers.Serializer):
     new_only = serializers.BooleanField(required=False, default=False)
+    new_files_only = serializers.BooleanField(required=False, default=False)
 
 
 class DiscoverSerializer(serializers.Serializer):

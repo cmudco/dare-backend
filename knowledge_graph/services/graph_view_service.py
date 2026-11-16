@@ -116,6 +116,9 @@ class GraphViewService:
             "status_label": graph.get_status_display(),
             "error": graph.error,
             "file_ids": file_ids,
+            "unread_file_ids": sorted(
+                graph.unread_files.filter(id__in=file_ids).values_list("id", flat=True)
+            ),
             "chunks_total": graph.chunks_total,
             "chunks_done": graph.chunks_done,
             "tokens_used": graph.tokens_used,
@@ -409,6 +412,7 @@ class GraphViewService:
             "discovery_cost": None,
             "build": None,
             "new_types": None,
+            "new_files": None,
             "unavailable_reason": "",
         }
         try:
@@ -416,9 +420,10 @@ class GraphViewService:
             payload["discovery_cost"] = RelationBuildService.discovery_estimate(
                 graph, plan
             )
-            build, new_types = RelationBuildService.estimates(graph, plan)
+            build, new_types, new_files = RelationBuildService.estimates(graph, plan)
             payload["build"] = asdict(build)
             payload["new_types"] = asdict(new_types) if new_types else None
+            payload["new_files"] = asdict(new_files) if new_files else None
         except (BackgroundModelUnavailable, DecisionsUnavailable) as error:
             payload["unavailable_reason"] = str(error)
         return payload

@@ -123,6 +123,7 @@ class RetrievalRequest:
     trace: bool = False  # capture a per-stage RetrievalTrace for the UI
     citations: Optional[CitationCounter] = None
     recent_turns: Tuple[str, ...] = ()  # lets a follow-up's "them" be resolved
+    force_graph: bool = False  # Graph mode: walk the graph whatever the route
 
 
 @dataclass(frozen=True)

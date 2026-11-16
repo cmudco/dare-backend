@@ -53,6 +53,7 @@ class RagMode(models.TextChoices):
     NAIVE = "naive", "Naive RAG"
     ADVANCED = "advanced", "Advanced RAG"
     AGENTIC = "agentic", "Agentic RAG"
+    GRAPH = "graph", "Graph RAG"
 
 
 class WebSocketMessageType(Enum):

@@ -27,6 +27,7 @@ from knowledge_graph.constants import MAX_RELATION_LABELS, GraphStatus, LabelSou
 from knowledge_graph.models import EntityCluster, KnowledgeGraph, RelationLabel
 from knowledge_graph.services.cluster_service import EntityClusterService
 from knowledge_graph.services.graph_view_service import GraphViewService
+from knowledge_graph.services.relation_service import RelationBuildService
 from knowledge_graph.tasks import (
     build_graph_relations,
     discover_graph_labels,
@@ -51,11 +52,9 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
         graphs = KnowledgeGraph.objects.filter(user=request.user)
         return Response([GraphViewService.summary(graph) for graph in graphs])
 
-    def create(self, request):
-        body = GraphCreateSerializer(data=request.data)
-        body.is_valid(raise_exception=True)
-        file_ids = set(body.validated_data["file_ids"])
-        folder_ids = set(body.validated_data["folder_ids"])
+    @staticmethod
+    def _chosen_files(request, file_ids: set, folder_ids: set) -> list:
+        """The documents behind a selection of files and folders the user owns."""
         owned_files = File.active_objects.filter(user=request.user, id__in=file_ids)
         if owned_files.count() != len(file_ids):
             raise ValidationError({"file_ids": "Some files could not be found."})
@@ -69,6 +68,16 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
         )
         if not files:
             raise ValidationError({"file_ids": "Choose at least one document."})
+        return files
+
+    def create(self, request):
+        body = GraphCreateSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        files = self._chosen_files(
+            request,
+            set(body.validated_data["file_ids"]),
+            set(body.validated_data["folder_ids"]),
+        )
         graph = KnowledgeGraph.objects.create(
             user=request.user,
             name=body.validated_data["name"],
@@ -86,10 +95,25 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
         graph = self._graph(pk)
         body = GraphUpdateSerializer(data=request.data, partial=True)
         body.is_valid(raise_exception=True)
-        for field, value in body.validated_data.items():
+        changes = dict(body.validated_data)
+        file_ids = changes.pop("file_ids", None)
+        folder_ids = changes.pop("folder_ids", None)
+        if file_ids is not None or folder_ids is not None:
+            if graph.status in BUSY_STATUSES and self._job_is_alive(graph):
+                return Response(
+                    {
+                        "error": "This graph is working. Change its files when it finishes."
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            RelationBuildService.change_files(
+                graph,
+                self._chosen_files(request, set(file_ids or ()), set(folder_ids or ())),
+            )
+        for field, value in changes.items():
             setattr(graph, field, value)
         # A build updates progress columns meanwhile; a full save would undo them.
-        graph.save(update_fields=[*body.validated_data, "updated_at"])
+        graph.save(update_fields=[*changes, "updated_at"])
         return Response(GraphViewService.summary(graph))
 
     def destroy(self, request, pk=None):
@@ -184,11 +208,15 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
             raise ValidationError({"labels": "Add at least one relationship type."})
         body = ApproveSerializer(data=request.data)
         body.is_valid(raise_exception=True)
+        new_files_only = body.validated_data["new_files_only"]
+        if new_files_only and not graph.unread_files.exists():
+            raise ValidationError({"new_files_only": "There are no new documents."})
         return self._start(
             graph,
             GraphStatus.BUILDING,
             build_graph_relations,
             body.validated_data["new_only"],
+            new_files_only,
         )
 
     @action(detail=True, methods=["post"], url_path="labels")

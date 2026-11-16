@@ -97,6 +97,12 @@ class KnowledgeGraph(TimeStampMixin):
         help_text="What the user wants to learn; steers suggested relationship types.",
     )
     files = models.ManyToManyField(File, related_name="knowledge_graphs")
+    unread_files = models.ManyToManyField(
+        File,
+        related_name="+",
+        blank=True,
+        help_text="Files added after the last build; no relationships read from them yet.",
+    )
     status = models.CharField(
         max_length=24, choices=GraphStatus.choices, default=GraphStatus.READY_FREE
     )

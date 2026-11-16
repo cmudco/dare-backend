@@ -114,8 +114,7 @@ class RetrievalPipeline:
         graph_route = (
             self.walker is not None
             and bool(request.file_ids)
-            and bool(plan)
-            and plan.wants_graph
+            and (request.force_graph or (bool(plan) and plan.wants_graph))
         )
         result = None
         if graph_route:
@@ -124,8 +123,8 @@ class RetrievalPipeline:
                     pool,
                     request.user_id,
                     request.file_ids,
-                    plan.query_entities,
-                    connect=plan.asks_connection,
+                    plan.query_entities if plan else (),
+                    connect=bool(plan) and plan.asks_connection,
                 )
             except Exception:
                 # The graph only adds context: the turn keeps its search results.

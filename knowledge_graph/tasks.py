@@ -28,9 +28,11 @@ def discover_graph_labels(graph_id: int) -> None:
 
 
 @job("default", timeout=BUILD_TIMEOUT_SECONDS)
-def build_graph_relations(graph_id: int, new_only: bool = False) -> None:
+def build_graph_relations(
+    graph_id: int, new_only: bool = False, new_files_only: bool = False
+) -> None:
     try:
-        RelationBuildService.run_build(graph_id, new_only)
+        RelationBuildService.run_build(graph_id, new_only, new_files_only)
     except Exception:
         RelationBuildService.mark_failed(graph_id, FAILED_MESSAGE)
         raise

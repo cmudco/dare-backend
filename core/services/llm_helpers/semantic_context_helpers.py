@@ -154,7 +154,7 @@ async def add_semantic_context_to_messages(
         # (query analysis -> hybrid -> rerank -> grounding -> trace) — the same
         # treatment shared libraries get, for chat turns and workflow steps
         # alike. Naive mode keeps the plain hybrid search.
-        if rag_mode == RagMode.ADVANCED:
+        if rag_mode in (RagMode.ADVANCED, RagMode.GRAPH):
             blocks = await _search_documents_for_query(
                 document_processor,
                 query,
@@ -167,6 +167,7 @@ async def add_semantic_context_to_messages(
                 target,
                 failures,
                 recent_turns,
+                force_graph=rag_mode == RagMode.GRAPH,
             )
             context = "\n\n".join(blocks)
         else:
@@ -272,6 +273,7 @@ def run_document_search(
     similarity_threshold: float,
     target: Optional[Any],
     recent_turns: Sequence[str] = (),
+    force_graph: bool = False,
 ) -> List[str]:
     """Advanced-mode document retrieval: the library pipeline, pointed at files.
 
@@ -293,6 +295,7 @@ def run_document_search(
         trace=True,
         citations=target.citations if target is not None else None,
         recent_turns=tuple(recent_turns),
+        force_graph=force_graph,
     )
     pipeline = build_pipeline("document", document_processor.openai_client)
 
@@ -320,6 +323,7 @@ async def _search_documents_for_query(
     target: Optional[Any],
     failures: Optional[List[str]] = None,
     recent_turns: Sequence[str] = (),
+    force_graph: bool = False,
 ) -> List[str]:
     """Async wrapper — document search touches the ORM and opens vector clients.
 
@@ -339,6 +343,7 @@ async def _search_documents_for_query(
             similarity_threshold,
             target,
             recent_turns,
+            force_graph,
         )
     except Exception as exc:
         logger.exception("Document context retrieval failed: %s", exc)

@@ -315,8 +315,8 @@ class RelationBuildService:
     @classmethod
     def estimates(
         cls, graph: KnowledgeGraph, plan: Dict[int, List[CandidatePair]]
-    ) -> Tuple[BuildEstimate, Optional[BuildEstimate]]:
-        """The price of reading every type, and of only the types not read yet."""
+    ) -> Tuple[BuildEstimate, Optional[BuildEstimate], Optional[BuildEstimate]]:
+        """The price of reading everything, only the unread types, only the new files."""
         lengths = dict(
             cls.graph_chunks(graph).filter(id__in=list(plan)).values_list("id", "text")
         )
@@ -325,9 +325,10 @@ class RelationBuildService:
             EntityClusterService.pending_candidates(graph.user, file_ids)
         )
         rate = decisions_price_per_million()
-        pairs = sum(len(items) for items in plan.values())
 
-        def priced(label_count: int) -> BuildEstimate:
+        def priced(
+            label_count: int, chunks: Dict[int, List[CandidatePair]] = plan
+        ) -> BuildEstimate:
             per_question = (
                 ESTIMATED_TOKENS_PER_QUESTION
                 + ESTIMATED_TOKENS_PER_LABEL * max(label_count, 1)
@@ -335,11 +336,11 @@ class RelationBuildService:
             tokens = alias_tokens + sum(
                 2 * len(lengths.get(chunk_id, "")) // CHARS_PER_TOKEN
                 + len(items) * per_question
-                for chunk_id, items in plan.items()
+                for chunk_id, items in chunks.items()
             )
             return BuildEstimate(
-                chunks=len(plan),
-                pairs=pairs,
+                chunks=len(chunks),
+                pairs=sum(len(items) for items in chunks.values()),
                 tokens=tokens,
                 cost=tokens * rate / 1_000_000,
                 rate_per_million=rate,
@@ -347,9 +348,16 @@ class RelationBuildService:
 
         unread = graph.labels.filter(read_at__isnull=True).count()
         read = graph.labels.count() - unread
+        new_chunks = (
+            cls.graph_chunks(graph)
+            .filter(id__in=list(plan), file_id__in=graph.unread_files.values("id"))
+            .values_list("id", flat=True)
+        )
+        in_new_files = {chunk_id: plan[chunk_id] for chunk_id in new_chunks}
         return (
             priced(graph.labels.count()),
             priced(unread) if unread and read else None,
+            priced(read, in_new_files) if read and in_new_files else None,
         )
 
     @classmethod
@@ -503,12 +511,16 @@ class RelationBuildService:
         return kept, first.input_tokens + checked.input_tokens, unmatched
 
     @classmethod
-    def build(cls, graph: KnowledgeGraph, new_only: bool = False) -> int:
+    def build(
+        cls, graph: KnowledgeGraph, new_only: bool = False, new_files_only: bool = False
+    ) -> int:
         """Read every chunk, then swap in the new relations. Returns skipped chunks.
 
         The old relations stay until the read finishes, so a failed rerun never
         costs the graph someone already paid for. ``new_only`` reads just the types
         no build has read yet and keeps every existing relationship.
+        ``new_files_only`` reads the files added since the last build, for the
+        types already read elsewhere, and keeps every existing relationship.
         """
         user = graph.user
         client = DecisionsService(user)
@@ -517,14 +529,27 @@ class RelationBuildService:
         EntityClusterService.adjudicate(user, file_ids, client)
         EntityClusterService.refresh_labels(user)
         plan = cls.plan_pairs(graph)
-        labels = list(
-            graph.labels.filter(read_at__isnull=True)
-            if new_only
-            else graph.labels.all()
+        new_files = (
+            set(graph.unread_files.values_list("id", flat=True))
+            if new_files_only
+            else set()
         )
+        if new_files_only:
+            labels = list(graph.labels.filter(read_at__isnull=False))
+        elif new_only:
+            labels = list(graph.labels.filter(read_at__isnull=True))
+        else:
+            labels = list(graph.labels.all())
         rows = {
             row.id: row for row in cls.graph_chunks(graph).filter(id__in=list(plan))
         }
+        if new_files_only:
+            rows = {
+                chunk_id: row
+                for chunk_id, row in rows.items()
+                if row.file_id in new_files
+            }
+            plan = {chunk_id: plan[chunk_id] for chunk_id in rows}
         starts = cls.page_starts(graph)
 
         def reading_text(chunk: DocumentChunk, pairs: Sequence[CandidatePair]) -> str:
@@ -593,7 +618,9 @@ class RelationBuildService:
                 KnowledgeGraph.objects.filter(pk=graph.pk).update(
                     chunks_done=done, tokens_used=tokens
                 )
-        cls._replace_relations(graph, results, labels, skipped)
+        cls._replace_relations(graph, results, labels, skipped, new_files)
+        if not new_only:
+            graph.unread_files.clear()
         cls._propose_missing_types(graph, unmatched)
         return len(skipped)
 
@@ -656,7 +683,9 @@ class RelationBuildService:
 
     @classmethod
     @transaction.atomic
-    def _replace_relations(cls, graph, results, labels, skipped=()) -> None:
+    def _replace_relations(
+        cls, graph, results, labels, skipped=(), only_files=()
+    ) -> None:
         # Reloaded here: a type removed during the read must not sink the whole swap.
         by_name = {label.name: label for label in graph.labels.all()}
         clusters = set(
@@ -664,7 +693,10 @@ class RelationBuildService:
         )
         read = [label.pk for label in labels if label.name in by_name]
         # A chunk that failed this time keeps what an earlier read found in it.
-        graph.relations.filter(label_id__in=read).exclude(chunk_id__in=skipped).delete()
+        stale = graph.relations.filter(label_id__in=read).exclude(chunk_id__in=skipped)
+        if only_files:
+            stale = stale.filter(file_id__in=only_files)
+        stale.delete()
         for chunk, kept in results:
             cls._save_chunk_relations(graph, chunk, kept, by_name, clusters)
         RelationLabel.objects.filter(pk__in=read).update(read_at=timezone.now())
@@ -699,6 +731,20 @@ class RelationBuildService:
             )
 
     @classmethod
+    @transaction.atomic
+    def change_files(cls, graph: KnowledgeGraph, file_ids: Sequence[int]) -> None:
+        """Swap the file set: a removed file loses its relationships, an added one
+        waits for a read the user approves."""
+        current = set(graph.files.values_list("id", flat=True))
+        wanted = set(file_ids)
+        removed = current - wanted
+        graph.files.set(wanted)
+        graph.relations.filter(file_id__in=removed).delete()
+        graph.unread_files.remove(*removed)
+        if graph.built_at:
+            graph.unread_files.add(*(wanted - current))
+
+    @classmethod
     def run_prepare(cls, graph_id: int) -> None:
         graph = KnowledgeGraph.objects.get(pk=graph_id)
         EntityClusterService.sync_user(graph.user)
@@ -727,10 +773,12 @@ class RelationBuildService:
         )
 
     @classmethod
-    def run_build(cls, graph_id: int, new_only: bool = False) -> None:
+    def run_build(
+        cls, graph_id: int, new_only: bool = False, new_files_only: bool = False
+    ) -> None:
         graph = KnowledgeGraph.objects.get(pk=graph_id)
         try:
-            skipped = cls.build(graph, new_only)
+            skipped = cls.build(graph, new_only, new_files_only)
         except DecisionsUnavailable as error:
             logger.warning("Relation build failed for graph %s: %s", graph_id, error)
             cls.mark_failed(graph_id, f"{error} Earlier relationships are unchanged.")
