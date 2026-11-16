@@ -31,7 +31,7 @@ hidden uses of the selected chat model.
 | Document structure parsing | During file ingestion | Docling's local parsing/layout model stack | Local process; OCR is disabled in this path | No |
 | Document vision enrichment | For figures and textless PDF pages before chunking | The user's `vision_model` default, overridable per OCR run; candidates come from the active wallet, recommendation first (`DOCUMENT_ENRICHMENT_MODEL` for the catalog, newest Gemini Flash for a proxy) | `core/services/vision_model_service.py`; dispatch and billing follow the chosen model's provider or the LiteLLM proxy | No |
 | Audio transcription | When a user submits audio or voice input | `whisper-1`; diarization uses `gpt-4o-transcribe-diarize` | Direct OpenAI transcription service | No |
-| Image generation | When the user explicitly requests an image | Catalog-selected `dall-e-2` or `dall-e-3` | OpenAI image-generation service with generation cost metadata | No |
+| Image generation | When the user explicitly requests an image | Catalog-selected GPT Image model (`gpt-image-2.6-sunburst` or `gpt-image-2.6-flare`) | OpenAI image-generation service with generation cost metadata | No |
 | MCP web search/fetch | When native MCP web tools execute | `claude-haiku-4-5-20251001` | Direct Anthropic server credential in the MCP web service | No |
 
 ## The shared Background model path

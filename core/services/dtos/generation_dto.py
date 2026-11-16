@@ -19,8 +19,8 @@ class GenerationConfig:
         web_search_enabled: Enable web search tool
         web_fetch_enabled: Enable Claude web fetch for explicit URLs/PDFs
         code_sandbox_enabled: Let OpenAI or Claude run Python on the full-text files
-        image_generation_enabled: Enable image generation (DALL-E)
-        image_generation_settings: DALL-E settings (size, quality, style)
+        image_generation_enabled: Enable image generation
+        image_generation_settings: Image settings (size, quality)
         audio_transcription_enabled: Enable audio transcription (Whisper)
         audio_transcription_settings: Whisper settings (language)
         structured_spec: JSON schema for structured output
