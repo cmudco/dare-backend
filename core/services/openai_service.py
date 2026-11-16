@@ -9,7 +9,7 @@ import base64
 import json
 import logging
 from decimal import Decimal
-from typing import AsyncGenerator, Dict, List, Optional, Tuple, Type, TypeVar
+from typing import AsyncGenerator, Dict, List, Optional, Sequence, Tuple, Type, TypeVar
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ from core.services.code_sandbox import (
     OpenAISandboxFiles,
 )
 from core.services.dtos.stream_event_dto import LLMStreamEvent
+from core.services.image_formats import to_provider_image
 from core.services.llm_utils import (
     OpenAIErrorHandler,
     OpenAIMessageFormatter,
@@ -40,6 +41,19 @@ from core.services.structured_output_error import (
 )
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_IMAGE_MODEL = "gpt-image-2.6-sunburst"
+
+# GPT Image 2.6 prices in USD per 1M tokens (Sunburst and Flare share them):
+# https://developers.openai.com/api/docs/pricing
+GPT_IMAGE_TEXT_INPUT_RATE = Decimal("5.00")
+GPT_IMAGE_IMAGE_INPUT_RATE = Decimal("8.00")
+GPT_IMAGE_OUTPUT_RATE = Decimal("30.00")
+
+GPT_IMAGE_SIZES = frozenset({"auto", "1024x1024", "1536x1024", "1024x1536"})
+GPT_IMAGE_QUALITIES = frozenset({"auto", "low", "medium", "high"})
+# The edit endpoint takes fewer formats than chat vision does (no GIF).
+GPT_IMAGE_EDIT_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 
 StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
@@ -607,102 +621,75 @@ class OpenAIService:
     async def generate_image(
         self,
         prompt: str,
-        model: str = "dall-e-3",
-        size: str = "1024x1024",
-        quality: str = "standard",
-        style: str = "vivid",
+        model: str,
+        size: str = "auto",
+        quality: str = "auto",
+        images: Sequence[Dict] = (),
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
-        Generate an image using DALL-E and stream the result like chat completions.
+        Generate an image with a GPT Image model and stream the result like a
+        chat completion: a status chunk, then the image bytes and metadata.
 
-        This follows the same pattern as stream_chat_completion to integrate cleanly
-        with the existing message flow.
-
-        Args:
-            prompt: Text description of the image to generate
-            model: DALL-E model ("dall-e-3" or "dall-e-2")
-            size: Image size
-            quality: Image quality
-            style: Image style
-
-        Yields:
-            Tuple of (status_message, metadata_dict)
+        With ``images`` (the turn's attachments as base64 data URLs) the model
+        edits or combines them instead of drawing from the prompt alone.
         """
+        if not prompt.strip():
+            yield "Error: Describe the image you want, or the change to make.", None
+            return
+
         try:
-            # Yield initial status
             yield "Generating image...", None
 
-            # Build request parameters
-            request_params = {
+            params = {
                 "model": model,
                 "prompt": prompt,
                 "size": size,
-                "response_format": "b64_json",
+                "quality": quality,
                 "n": 1,
             }
+            if images:
+                response = await self.client.images.edit(
+                    image=[self._image_upload(image) for image in images], **params
+                )
+            else:
+                response = await self.client.images.generate(**params)
 
-            # Add quality and style for DALL-E 3
-            if model == "dall-e-3":
-                request_params["quality"] = quality
-                request_params["style"] = style
-
-            # Call OpenAI Images API
-            response = await self.client.images.generate(**request_params)
-
-            # Extract response data
-            image_data = response.data[0]
-            revised_prompt = getattr(image_data, "revised_prompt", prompt)
-            image_bytes = base64.b64decode(image_data.b64_json)
-
-            # Calculate cost
-            cost = self._calculate_dalle_cost(model, size, quality)
-
-            # Yield final result with metadata
             metadata = {
-                "image_bytes": image_bytes,
-                "revised_prompt": revised_prompt,
-                "cost": cost,
+                "image_bytes": base64.b64decode(response.data[0].b64_json),
+                "cost": self._image_generation_cost(response.usage),
                 "model": model,
-                "size": size,
-                "quality": quality,
-                "style": style,
-                "input_tokens": 0,  # Images don't use tokens
+                "size": response.size or size,
+                "quality": response.quality or quality,
+                # The turn is billed by the quoted cost, not by these counts.
+                "input_tokens": 0,
                 "output_tokens": 0,
             }
 
             yield "Image generated successfully", metadata
 
         except Exception as e:
-            logger.exception("DALL-E generation error")
+            logger.exception("Image generation error")
             error_message = OpenAIErrorHandler.format_error(e)
             yield f"Error: {error_message}", None
 
-    def _calculate_dalle_cost(self, model: str, size: str, quality: str) -> Decimal:
-        """Calculate DALL-E generation cost."""
-        pricing = {
-            "dall-e-3": {
-                "1024x1024": {"standard": Decimal("0.040"), "hd": Decimal("0.080")},
-                "1024x1792": {"standard": Decimal("0.080"), "hd": Decimal("0.120")},
-                "1792x1024": {"standard": Decimal("0.080"), "hd": Decimal("0.120")},
-            },
-            "dall-e-2": {
-                "1024x1024": {"standard": Decimal("0.020")},
-                "512x512": {"standard": Decimal("0.018")},
-                "256x256": {"standard": Decimal("0.016")},
-            },
-        }
+    @staticmethod
+    def _image_upload(image: Dict) -> Tuple[str, bytes, str]:
+        """Turn an attachment's base64 data URL into a multipart file upload."""
+        encoded = image["preview"].split(",", 1)[1]
+        data, mime_type = to_provider_image(
+            base64.b64decode(encoded), image["type"], GPT_IMAGE_EDIT_TYPES
+        )
+        return image["name"], data, mime_type
 
-        try:
-            model_pricing = pricing.get(model, pricing["dall-e-3"])
-            size_pricing = model_pricing.get(size, model_pricing["1024x1024"])
-
-            if isinstance(size_pricing, dict):
-                return size_pricing.get(
-                    quality, size_pricing.get("standard", Decimal("0.040"))
-                )
-            return size_pricing
-        except Exception:
-            return Decimal("0.040")
+    @staticmethod
+    def _image_generation_cost(usage) -> Decimal:
+        """Price a GPT Image call from the token usage OpenAI reports."""
+        details = usage.input_tokens_details
+        return (
+            details.text_tokens * GPT_IMAGE_TEXT_INPUT_RATE
+            + details.image_tokens * GPT_IMAGE_IMAGE_INPUT_RATE
+            + usage.output_tokens * GPT_IMAGE_OUTPUT_RATE
+        ) / Decimal(1_000_000)
 
     # ==================== Static Methods ====================
 

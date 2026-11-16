@@ -178,7 +178,7 @@ class MessageCoordinator:
         self, usage: Dict, message_data: Dict, message_obj: "Message"
     ) -> Optional[Dict]:
         """
-        Handle generated image from DALL-E: save file and build response data.
+        Handle a generated image: save file and build response data.
 
         Args:
             usage: Usage dict containing image_bytes and metadata

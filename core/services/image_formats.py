@@ -49,13 +49,15 @@ def tiff_to_pdf(data: bytes) -> bytes:
     return output.getvalue()
 
 
-def to_provider_image(data: bytes, mime_type: str) -> Tuple[bytes, str]:
-    """The image as-is if providers accept its type, otherwise its first frame as PNG.
+def to_provider_image(
+    data: bytes, mime_type: str, accepted: frozenset = PROVIDER_IMAGE_TYPES
+) -> Tuple[bytes, str]:
+    """The image as-is if its type is accepted, otherwise its first frame as PNG.
 
     Bytes Pillow cannot decode (SVG, corrupt files) are returned unchanged so
     the provider handler can skip them as it always has.
     """
-    if mime_type in PROVIDER_IMAGE_TYPES:
+    if mime_type in accepted:
         return data, mime_type
     try:
         with Image.open(BytesIO(data)) as image:

@@ -48,7 +48,7 @@ class LLMDescriptor:
             ``"llama"``, or ``"custom"``.
         is_reasoning: Reasoning-model flag (e.g. o1/o3) so dispatch can swap
             ``max_tokens`` for ``max_completion_tokens``.
-        is_image_generator: True for DALL-E and equivalents.
+        is_image_generator: True for image generation models.
         is_audio_transcriber: True for Whisper and equivalents.
         llm: The DB-backed `LLM` row when this descriptor came from one.
             ``None`` for synthetic LiteLLM entries.
