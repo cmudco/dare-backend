@@ -26,7 +26,7 @@ from core.services.dtos.ensemble_dto import MAX_ANGLE_CHARS, MAX_BRIEF_CHARS
 from core.services.dtos.llm_descriptor_dto import litellm_picker_id
 from core.services.energy_service import compute_relatable_stats
 from dare_tools.models import DareTool
-from files.api.serializers import FileSerializer, TagSerializer
+from files.api.serializers import AttachedFileSerializer, TagSerializer
 from mcp.models import MCPServer
 from projects.models import PersonalProject
 from projects.services.project_service import project_model_ref
@@ -365,7 +365,7 @@ class ConversationSummarySerializer(serializers.ModelSerializer):
 
 
 class SnippetSerializer(serializers.ModelSerializer):
-    file = FileSerializer(read_only=True)
+    file = AttachedFileSerializer(read_only=True)
     vector_db_source = serializers.SerializerMethodField()
     library = serializers.SerializerMethodField()
 
@@ -489,7 +489,7 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
 
 class MessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.ReadOnlyField(read_only=True)
-    files = FileSerializer(many=True, read_only=True)
+    files = AttachedFileSerializer(many=True, read_only=True)
     tags = TagSerializer(many=True, read_only=True)
     file_ids = serializers.ListField(
         child=serializers.IntegerField(), write_only=True, required=False

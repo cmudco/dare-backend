@@ -102,10 +102,11 @@ class ConversationService:
                 allowed_user_ids = [conversation.user_id]
                 if conversation.file_owner_id:
                     allowed_user_ids.append(conversation.file_owner_id)
+                # Ids only: a full row carries the file's whole parsed document.
                 return list(
                     File.active_objects.filter(
                         pk__in=all_file_ids, user_id__in=allowed_user_ids
-                    )
+                    ).values_list("pk", flat=True)
                 )
 
             files = await database_sync_to_async(_get_accessible_files)()

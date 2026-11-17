@@ -203,6 +203,24 @@ class FileSerializer(serializers.ModelSerializer):
         return file_instance
 
 
+class AttachedFileSerializer(FileSerializer):
+    """A file as a chat message shows it.
+
+    The two counts are read out of the whole parsed document, which a chat
+    never displays and which costs about a megabyte per file to load.
+    """
+
+    structure_counts = None
+    failed_image_count = None
+
+    class Meta(FileSerializer.Meta):
+        fields = [
+            name
+            for name in FileSerializer.Meta.fields
+            if name not in ("structure_counts", "failed_image_count")
+        ]
+
+
 class FileStructureSerializer(serializers.ModelSerializer):
     """The parsed document model for one file.
 
