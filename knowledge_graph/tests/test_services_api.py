@@ -416,12 +416,13 @@ class TenantIsolationTests(TestCase):
             format="json",
         ).json()["id"]
         url = f"/api/knowledge-graphs/{graph_id}/view/"
-        with patch("knowledge_graph.services.graph_view_service.MAX_NODES", 1):
-            top = self.api.get(url).json()
-            shown = {node["id"] for node in top["nodes"]}
-            hidden = next(e for e in top["entities"] if e["id"] not in shown)
-            focused = self.api.get(f"{url}?focus={hidden['id']}").json()
-        self.assertEqual(len(top["entities"]), 2)
+        second_page = self.api.get(f"{url}?offset=1").json()
+        shown = {node["id"] for node in second_page["nodes"]}
+        names = self.api.get(f"/api/knowledge-graphs/{graph_id}/names/").json()
+        hidden = next(e for e in names["results"] if e["id"] not in shown)
+        focused = self.api.get(f"{url}?offset=1&focus={hidden['id']}").json()
+        self.assertEqual(len(shown), 1)
+        self.assertEqual(names["total"], 2)
         self.assertIn(hidden["id"], {node["id"] for node in focused["nodes"]})
 
     def test_folder_adds_its_documents(self):
@@ -465,6 +466,9 @@ class TenantIsolationTests(TestCase):
         )
         self.assertEqual(
             self.api.post(f"/api/knowledge-graphs/{graph.id}/approve/").status_code, 404
+        )
+        self.assertEqual(
+            self.api.get(f"/api/knowledge-graphs/{graph.id}/names/").status_code, 404
         )
 
     def test_other_users_file_is_refused(self):

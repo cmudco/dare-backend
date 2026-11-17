@@ -5,6 +5,8 @@ from collections import Counter, defaultdict
 from dataclasses import asdict
 from typing import Dict, List, Optional, Set, Tuple
 
+from django.core.cache import cache
+
 from core.services.background_model_service import BackgroundModelUnavailable
 from core.services.decisions_service import DecisionsUnavailable
 from files.models import DocumentChunk, DocumentEntity
@@ -19,7 +21,14 @@ from knowledge_graph.models import (
 )
 from knowledge_graph.services.relation_service import RelationBuildService
 
-MAX_NODES = 60
+# How many names one page of the picture draws; the first is the default.
+PAGE_SIZES = (60, 150, 300)
+LINK_EDGES_PER_NODE = 1.5
+NAME_GROUPS = ("person", "location", "organization")
+MAX_NAMES_PAGE = 200
+# The ranked name list is rebuilt on every view; this only spares the list and
+# search requests in between from redoing it.
+NAMES_CACHE_SECONDS = 600
 # Passages a name appears in: (label, from, to).
 ENTITY_BANDS = (
     ("1", 1, 1),
@@ -30,7 +39,6 @@ ENTITY_BANDS = (
 BAND_EXAMPLES = 4
 PERSON_BONUS = 3
 MAX_FOCUS_NEIGHBOURS = 12
-MAX_LINK_EDGES = 90
 MAX_MENTIONS = 30
 PREVIEW_CHARS = 240
 RELATION_FIELDS = (
@@ -134,8 +142,57 @@ class GraphViewService:
             ],
         }
 
+    @staticmethod
+    def _names_key(graph: KnowledgeGraph) -> str:
+        return f"knowledge_graph:names:{graph.id}"
+
     @classmethod
-    def view(cls, graph: KnowledgeGraph, focus: Optional[int] = None) -> Dict:
+    def names(
+        cls,
+        graph: KnowledgeGraph,
+        group: str = "",
+        query: str = "",
+        offset: int = 0,
+        limit: int = MAX_NAMES_PAGE,
+    ) -> Dict:
+        """One slice of every name in the graph, most connected first."""
+        rows = cache.get(cls._names_key(graph))
+        if rows is None:
+            cls.view(graph)
+            rows = cache.get(cls._names_key(graph)) or []
+
+        def group_of(kind: str) -> str:
+            return kind if kind in NAME_GROUPS else "other"
+
+        counts = Counter(group_of(kind) for _, _, kind, _ in rows)
+        needle = query.strip().lower()
+        matched = [
+            row
+            for row in rows
+            if (not group or group_of(row[2]) == group)
+            and (not needle or needle in row[1].lower())
+        ]
+        if needle:
+            # Stable, so names that start with the search stay in rank order.
+            matched.sort(key=lambda row: not row[1].lower().startswith(needle))
+        return {
+            "total": len(rows),
+            "counts": {name: counts[name] for name in (*NAME_GROUPS, "other")},
+            "matches": len(matched),
+            "results": [
+                {"id": row[0], "label": row[1], "kind": row[2], "passages": row[3]}
+                for row in matched[offset : offset + min(limit, MAX_NAMES_PAGE)]
+            ],
+        }
+
+    @classmethod
+    def view(
+        cls,
+        graph: KnowledgeGraph,
+        focus: Optional[int] = None,
+        size: int = PAGE_SIZES[0],
+        offset: int = 0,
+    ) -> Dict:
         file_ids = cls._file_ids(graph)
         cluster_of = dict(
             ClusterAlias.objects.filter(user=graph.user).values_list(
@@ -207,11 +264,29 @@ class GraphViewService:
                 + (PERSON_BONUS if kinds.get(cluster_id) == "person" else 0)
             )
 
-        ranked = sorted(mentions, key=importance, reverse=True)
-        # A common noun like "government" links everything and explains nothing.
-        named = [c for c in ranked if keys_seen[c] - generic]
-        chosen = named[:MAX_NODES]
-        # Searching for an entity outside the top nodes brings it and its closest
+        passages: Counter = Counter()
+        for members in chunk_members.values():
+            passages.update(members)
+
+        def tier(cluster_id: int) -> int:
+            # Bands run from fewest passages to most; tier 1 is the most.
+            return -next(
+                index
+                for index, (_, low, high) in enumerate(ENTITY_BANDS)
+                if low <= passages[cluster_id] <= high
+            )
+
+        by_importance = sorted(mentions, key=importance, reverse=True)
+        # Names that keep coming back lead, tier by tier. Inside a tier a common
+        # noun like "government" goes last: it links everything and explains
+        # nothing.
+        ranked = sorted(
+            by_importance,
+            key=lambda c: (tier(c), not keys_seen[c] - generic),
+        )
+        page = ranked[offset : offset + size]
+        chosen = list(page)
+        # Picking an entity outside this page brings it and its closest
         # neighbours onto the canvas.
         if focus in mentions:
             neighbours: Counter = Counter()
@@ -225,6 +300,12 @@ class GraphViewService:
         chosen_set = set(chosen)
         all_clusters = EntityCluster.objects.filter(id__in=mentions).in_bulk()
         clusters = {key: all_clusters[key] for key in chosen_set if key in all_clusters}
+        # Names tied to a drawn name but not drawn themselves, so the page can
+        # say a name has more relationships than the lines it shows.
+        partners: Dict[int, Set[int]] = defaultdict(set)
+        for edge in grouped.values():
+            partners[edge["source"]].add(edge["target"])
+            partners[edge["target"]].add(edge["source"])
         nodes = [
             {
                 "id": cluster_id,
@@ -234,6 +315,7 @@ class GraphViewService:
                 "files": len(files_of[cluster_id]),
                 "aliases": len(keys_seen[cluster_id]),
                 "relations": relation_degree[cluster_id],
+                "elsewhere": len(partners[cluster_id] - chosen_set),
             }
             for cluster_id in chosen
             if cluster_id in clusters
@@ -247,7 +329,7 @@ class GraphViewService:
         typed_pairs = {tuple(sorted((s, t))) for s, _, t in grouped}
         strongest = {
             pair
-            for pair, _ in co_mentions.most_common(MAX_LINK_EDGES)
+            for pair, _ in co_mentions.most_common(int(len(page) * LINK_EDGES_PER_NODE))
             if pair not in typed_pairs
         }
         # Every pair ships so a click can show all of an entity's links; only the
@@ -262,13 +344,22 @@ class GraphViewService:
             for (a, b), weight in co_mentions.most_common()
             if (a, b) not in typed_pairs
         ]
-        return {
-            "nodes": nodes,
-            "entities": [
-                {"id": cluster_id, "label": all_clusters[cluster_id].label}
+        cache.set(
+            cls._names_key(graph),
+            [
+                (
+                    cluster_id,
+                    all_clusters[cluster_id].label,
+                    all_clusters[cluster_id].kind,
+                    passages[cluster_id],
+                )
                 for cluster_id in ranked
                 if cluster_id in all_clusters
             ],
+            NAMES_CACHE_SECONDS,
+        )
+        return {
+            "nodes": nodes,
             "relations": [
                 edge
                 for edge in grouped.values()
@@ -280,7 +371,7 @@ class GraphViewService:
                 "documents": len(file_ids),
                 "passages": DocumentChunk.objects.filter(file_id__in=file_ids).count(),
                 "entities": len(mentions),
-                "shown_entities": len(nodes),
+                "page_entities": len(page),
                 "spellings": sum(len(keys) for keys in keys_seen.values()),
                 "merged_entities": sum(
                     1 for keys in keys_seen.values() if len(keys) > 1
@@ -290,22 +381,19 @@ class GraphViewService:
                 ),
                 "relations": len(relations),
                 "entity_bands": cls._entity_bands(
-                    chunk_members, relation_degree, mentions, all_clusters
+                    passages, relation_degree, mentions, all_clusters
                 ),
             },
         }
 
     @staticmethod
     def _entity_bands(
-        chunk_members: Dict[int, Set[int]],
+        passages: Counter,
         relation_degree: Counter,
         mentions: Counter,
         clusters: Dict[int, EntityCluster],
     ) -> List[Dict]:
         """How many names appear in one passage, a few, or many."""
-        passages: Counter = Counter()
-        for members in chunk_members.values():
-            passages.update(members)
         bands = []
         for name, low, high in ENTITY_BANDS:
             inside = [c for c, n in passages.items() if low <= n <= high]
