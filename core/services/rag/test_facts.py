@@ -36,5 +36,26 @@ class FactsBlockTests(SimpleTestCase):
         self.assertEqual(lines[1], "One connection further:")
         self.assertEqual(len(facts_block(facts, budget=1).splitlines()), 0)
 
+    def test_what_the_question_asks_about_leads_and_is_followed_first(self):
+        facts = [
+            fact("Luffy", "brother_of", "Ace"),
+            fact("Luffy", "brother_of", "Ace"),
+            fact("Zoro", "trained_with", "Luffy"),
+            fact("Ace", "son_of", "Roger", step=2),
+            fact("Ace", "son_of", "Roger", step=2),
+            fact("Zoro", "born_in", "Shimotsuki", step=2),
+        ]
+        lines = facts_block(facts, question="Who trained with Luffy?").splitlines()[1:]
+        self.assertEqual(
+            lines,
+            [
+                "- Zoro | trained with | Luffy (a.pdf)",
+                "- Luffy | brother of | Ace (a.pdf; stated in 2 passages)",
+                "One connection further:",
+                "- Zoro | born in | Shimotsuki (a.pdf)",
+                "- Ace | son of | Roger (a.pdf; stated in 2 passages)",
+            ],
+        )
+
     def test_nothing_stored_adds_nothing(self):
         self.assertEqual(facts_block([]), "")
