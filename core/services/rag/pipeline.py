@@ -164,7 +164,8 @@ class RetrievalPipeline:
                 fact_note = facts_block(
                     self.fact_loader(
                         request.user_id, request.file_ids, plan.query_entities
-                    )
+                    ),
+                    question=f"{request.query} {plan.rewritten_query}",
                 )
             except Exception:
                 logger.exception("Stored connections could not be loaded")

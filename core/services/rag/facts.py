@@ -3,18 +3,23 @@
 Pure: the rows come from an injected loader, so nothing here touches the ORM.
 """
 
+import re
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 FACT_CHAR_BUDGET = 6000
 MAX_SOURCES_PER_FACT = 2
+# Letters of a relation's first word a question word must start with: "serv"
+# lets "serve" and "service" ask about served_in.
+STEM_CHARS = 4
 
 _HEADER = (
-    "[stored connections] A model read these from the files, and each was checked "
-    "against the passage that states it. Use them to answer who is connected to "
-    "whom, including across files, and follow one connection to the next when the "
-    "question chains. Name the file a connection comes from, and cite a passage "
-    "below with its [S#] tag when one states the same thing. The list is "
+    "[stored connections] Facts already read from the files; each was checked "
+    "against the passage that states it. They are evidence equal to the passages: "
+    "when a connection answers the question, state it and name its file, even if "
+    "no passage repeats it. When the question chains, such as who did something "
+    "and then a fact about them, follow the first connection to the next. Cite a "
+    "passage with its [S#] tag when one states the same thing. The list is "
     "incomplete: a connection missing here may still be in the files, so never "
     "say something is false only because it is not listed."
 )
@@ -40,15 +45,41 @@ def _source(fact: StoredFact) -> str:
     return f"{fact.file_name} p. {fact.page}" if fact.page else fact.file_name
 
 
-def facts_block(facts: Sequence[StoredFact], budget: int = FACT_CHAR_BUDGET) -> str:
-    """One line per distinct connection, most-stated first, nearest names first."""
+def _asks_about(relation: str, question_words: FrozenSet[str]) -> bool:
+    stem = relation.split("_")[0].lower()[:STEM_CHARS]
+    return len(stem) == STEM_CHARS and any(
+        word.startswith(stem) for word in question_words
+    )
+
+
+def facts_block(
+    facts: Sequence[StoredFact], question: str = "", budget: int = FACT_CHAR_BUDGET
+) -> str:
+    """One line per distinct connection, nearest names first.
+
+    A busy name has more connections than the budget holds, so the kinds the
+    question asks about lead, and one step further the names those reach lead.
+    The rest follow most-stated first.
+    """
     grouped: Dict[Tuple[str, str, str], List[StoredFact]] = {}
     for fact in facts:
         grouped.setdefault((fact.subject, fact.relation, fact.object), []).append(fact)
-    ordered = sorted(
-        grouped.items(),
-        key=lambda item: (min(f.step for f in item[1]), -len(item[1]), item[0]),
-    )
+    words = frozenset(re.findall(r"[a-z]+", question.lower()))
+    asked = {key for key in grouped if _asks_about(key[1], words)}
+    reached = {
+        name
+        for key in asked
+        if min(fact.step for fact in grouped[key]) <= 1
+        for name in (key[0], key[2])
+    }
+
+    def rank(item):
+        key, rows = item
+        step = min(fact.step for fact in rows)
+        continues = key[0] in reached or key[2] in reached
+        return (step, step > 1 and not continues, key not in asked, -len(rows), key)
+
+    ordered = sorted(grouped.items(), key=rank)
     lines: List[str] = []
     used = len(_HEADER)
     further = False
