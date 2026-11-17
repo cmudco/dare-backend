@@ -6,4 +6,5 @@ class UsersConfig(AppConfig):
     name = "users"
 
     def ready(self):
+        import users.access_request_signals  # noqa: F401
         import users.signals  # noqa

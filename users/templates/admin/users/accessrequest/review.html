@@ -1,0 +1,41 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+{% block content %}
+{% if unavailable %}
+<p>{% translate "This request has already been reviewed, email approval is unavailable, or the link is no longer valid. Open Access requests in Django admin to review current status." %}</p>
+{% else %}
+<dl>
+  <dt>{% translate "Name" %}</dt><dd>{{ access_request.name }}</dd>
+  <dt>{% translate "Email" %}</dt><dd>{{ access_request.email }}</dd>
+  {% if access_request.reason %}<dt>{% translate "Reason" %}</dt><dd>{{ access_request.reason|linebreaksbr }}</dd>{% endif %}
+  <dt>{% translate "Status" %}</dt><dd>{{ access_request.get_status_display }}</dd>
+</dl>
+{% if admin_account %}
+<p>{% translate "This account already has administrator access. Only a superuser can record its existing approval here; its roles, permissions and access group will be preserved. Manage activation or deactivation in Users." %} {% if user_admin_url %}<a href="{{ user_admin_url }}">{% translate "Open user account" %}</a>{% endif %}</p>
+{% endif %}
+{% if can_decide and not admin_account or can_decide and request.user.is_superuser and access_request.status != "APPROVED" %}
+{% if revising %}
+<p>{% translate "Changing an approval to a decline disables the applicant's account and invalidates its invitation code. Changing a decline to an approval still requires email verification. The change is recorded and the applicant is notified." %}</p>
+{% endif %}
+{% if not admin_account %}
+{% if access_request.registered_user_id %}
+<p>{% translate "Approval allows this registered USER account to activate after email verification. It does not grant administrator permissions or verify email ownership." %}</p>
+{% else %}
+<p>{% translate "Approval creates a single-use USER invitation and emails it to this applicant. It does not create an administrator account or verify email ownership." %}</p>
+{% endif %}
+{% endif %}
+<form method="post">
+  {% csrf_token %}
+  {% if revising %}<input type="hidden" name="decision_version" value="{{ access_request.decision_version }}">{% endif %}
+  {% if not revising or access_request.status == "DECLINED" %}
+  <button type="submit" name="decision" value="approve">{% if admin_account %}{% translate "Record existing approval" %}{% else %}{% translate "Approve request" %}{% endif %}</button>
+  {% endif %}
+  {% if not admin_account %}
+  {% if not revising or access_request.status == "APPROVED" %}
+  <button type="submit" name="decision" value="decline">{% translate "Decline request" %}</button>
+  {% endif %}
+  {% endif %}
+</form>
+{% endif %}
+{% endif %}
+{% endblock %}

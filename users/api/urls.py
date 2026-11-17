@@ -2,7 +2,6 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from users.api.views import (
     AccountDeletionView,
-    CustomRegisterView,
     CustomResendEmailVerificationView,
     CustomVerifyEmailView,
     UserStatsView,
@@ -16,6 +15,8 @@ from users.api.views import (
     token_health_check,
 )
 from users.constants import APP_NAME
+from users.api.access_requests import AccessRequestView, SignupOptionsView
+from users.api.registration import CustomRegisterView
 
 app_name = APP_NAME
 
@@ -25,9 +26,13 @@ router.register(r'chunking', ChunkingSettingsViewSet, basename='chunking')
 router.register(r'avatar', AvatarViewSet, basename='avatar')
 
 urlpatterns = [
+    path(
+        "dj-rest-auth/registration/", CustomRegisterView.as_view(), name="rest_register"
+    ),
+    path("access-requests/", AccessRequestView.as_view(), name="access-request"),
+    path("signup-options/", SignupOptionsView.as_view(), name="signup-options"),
     # Custom verify-email with auto-login (must come before dj-rest-auth include)
     path("dj-rest-auth/registration/verify-email/", CustomVerifyEmailView.as_view(), name="rest_verify_email"),
-    path("dj-rest-auth/registration/", CustomRegisterView.as_view(), name="rest_register"),
     path(
         "dj-rest-auth/registration/resend-email/",
         CustomResendEmailVerificationView.as_view(),
