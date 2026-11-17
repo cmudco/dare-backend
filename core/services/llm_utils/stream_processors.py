@@ -813,8 +813,11 @@ class GeminiStreamProcessor:
                         for part in candidate.content.parts or []:
                             # Handle text parts
                             if hasattr(part, "text") and part.text:
-                                wrote_text = True
-                                yield LLMStreamEvent.text_delta(part.text)
+                                if getattr(part, "thought", False):
+                                    yield LLMStreamEvent.thinking_delta(part.text)
+                                else:
+                                    wrote_text = True
+                                    yield LLMStreamEvent.text_delta(part.text)
 
                             # Handle function calls (Gemini's tool calling).
                             # Arguments travel only via TOOL_CALL_READY — a

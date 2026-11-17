@@ -40,7 +40,7 @@ class SocraticTokenBudgetTests(SimpleTestCase):
             config = service._build_generation_config(
                 request.generation.max_tokens, 0.7, None
             )
-            self.assertEqual(config.max_output_tokens, 35000)
+            self.assertEqual(config.max_output_tokens, 47000)
 
     def test_higher_explicit_allowance_is_preserved(self):
         self.assertEqual(self.request(max_tokens=40000).generation.max_tokens, 40000)
