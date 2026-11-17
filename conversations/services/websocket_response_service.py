@@ -15,6 +15,7 @@ from channels.db import database_sync_to_async
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
 from conversations.models import Artifact, Message
+from conversations.services.message_query_service import message_file_prefetches
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +80,8 @@ class WebSocketResponseService:
         @database_sync_to_async
         def serialize_message():
             msg = Message.active_objects.prefetch_related(
-                "files",
+                *message_file_prefetches(),
                 "tags",
-                "snippets__file",
                 "snippets__library",
                 "web_search_sources",
                 "artifacts",

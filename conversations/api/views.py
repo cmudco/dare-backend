@@ -60,7 +60,10 @@ from conversations.services.llm_filter_service import (
     filter_for_bot,
     parse_scope,
 )
-from conversations.services.message_query_service import messages_for_display
+from conversations.services.message_query_service import (
+    message_file_prefetches,
+    messages_for_display,
+)
 from conversations.services.sharing_service import (
     ConversationSharingService,
     SharingValidationError,
@@ -833,7 +836,7 @@ class MessageViewSet(viewsets.ModelViewSet):
         return (
             Message.active_objects.filter(conversation__user=self.request.user)
             .select_related("llm", "conversation")
-            .prefetch_related("files", "tags", "snippets__file", "web_search_sources")
+            .prefetch_related(*message_file_prefetches(), "tags", "web_search_sources")
         )
 
     def get_serializer_context(self):
