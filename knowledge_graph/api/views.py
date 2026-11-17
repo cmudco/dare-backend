@@ -26,7 +26,11 @@ from knowledge_graph.api.serializers import (
 from knowledge_graph.constants import MAX_RELATION_LABELS, GraphStatus, LabelSource
 from knowledge_graph.models import EntityCluster, KnowledgeGraph, RelationLabel
 from knowledge_graph.services.cluster_service import EntityClusterService
-from knowledge_graph.services.graph_view_service import GraphViewService
+from knowledge_graph.services.graph_view_service import (
+    MAX_NAMES_PAGE,
+    PAGE_SIZES,
+    GraphViewService,
+)
 from knowledge_graph.services.relation_service import RelationBuildService
 from knowledge_graph.tasks import (
     build_graph_relations,
@@ -122,10 +126,31 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=["get"], url_path="view")
     def graph_view(self, request, pk=None):
-        focus = request.query_params.get("focus", "")
+        params = request.query_params
+        focus = params.get("focus", "")
+        size = params.get("size", "")
+        offset = params.get("offset", "")
         return Response(
             GraphViewService.view(
-                self._graph(pk), focus=int(focus) if focus.isdigit() else None
+                self._graph(pk),
+                focus=int(focus) if focus.isdigit() else None,
+                size=int(size) if size in map(str, PAGE_SIZES) else PAGE_SIZES[0],
+                offset=int(offset) if offset.isdigit() else 0,
+            )
+        )
+
+    @action(detail=True, methods=["get"], url_path="names")
+    def names(self, request, pk=None):
+        params = request.query_params
+        offset = params.get("offset", "")
+        limit = params.get("limit", "")
+        return Response(
+            GraphViewService.names(
+                self._graph(pk),
+                group=params.get("group", ""),
+                query=params.get("q", ""),
+                offset=int(offset) if offset.isdigit() else 0,
+                limit=int(limit) if limit.isdigit() else MAX_NAMES_PAGE,
             )
         )
 
