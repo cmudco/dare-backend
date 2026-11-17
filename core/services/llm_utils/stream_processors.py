@@ -342,9 +342,9 @@ class OpenAIStreamProcessor:
         response,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
-        Process OpenAI Responses API stream (web search path).
+        Process OpenAI Responses API stream.
 
-        Extracts text content, function tool calls, and web search sources
+        Extracts text content, thinking summaries, function tool calls, and web search sources
         (when enabled). Sources are included in the final usage frame under
         'web_search_sources'; tool calls are emitted as the same
         start/args/ready event trio the Chat Completions processor emits, so
@@ -370,6 +370,13 @@ class OpenAIStreamProcessor:
                 if hasattr(chunk, "delta") and chunk.delta:
                     wrote_text = True
                     yield LLMStreamEvent.text_delta(chunk.delta)
+
+            if chunk.type == "response.reasoning_summary_text.delta" and chunk.delta:
+                yield LLMStreamEvent.thinking_delta(chunk.delta)
+
+            # Each summary part opens with its own heading.
+            if chunk.type == "response.reasoning_summary_part.done":
+                yield LLMStreamEvent.thinking_delta("\n\n")
 
             # A finished function call arrives as a completed output item with
             # its arguments already fully accumulated, so the whole lifecycle

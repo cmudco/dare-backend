@@ -121,6 +121,10 @@ class OpenAIService:
         accepts function tools on reasoning models (the whole GPT-5.x family)
         and the only one that can run web search alongside them.
 
+        Reasoning models go there too, with or without tools: it is the only
+        surface that streams their thinking summaries, and Chat Completions
+        stays silent for as long as they think.
+
         The exception is a custom ``base_url``, which means we are talking to a
         LiteLLM proxy or another OpenAI-compatible gateway rather than OpenAI
         itself. Those speak /v1/chat/completions but not necessarily
@@ -132,7 +136,7 @@ class OpenAIService:
         Returns:
             True when the Responses API should be used
         """
-        return bool(tools) and self.base_url is None
+        return (bool(tools) or self.is_reasoning) and self.base_url is None
 
     async def stream_chat_completion(
         self,
@@ -174,6 +178,7 @@ class OpenAIService:
                     prepared_messages,
                     max_tokens,
                     temperature,
+                    effort,
                     tools,
                     allow_tool_calls,
                 )
@@ -397,21 +402,24 @@ class OpenAIService:
         messages: List[Dict[str, str]],
         max_tokens: int,
         temperature: float,
+        effort: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         allow_tool_calls: bool = True,
     ):
         """
         Stream using the Responses API.
 
-        This is the path for anything tool-shaped: web search, function calling,
-        or both together. Chat Completions rejects function tools on reasoning
-        models (the whole GPT-5.x family) unless reasoning is disabled, and it
-        cannot mix web search with function tools at all.
+        This is the path for reasoning models and for anything tool-shaped:
+        web search, function calling, or both together. Chat Completions
+        rejects function tools on reasoning models (the whole GPT-5.x family)
+        unless reasoning is disabled, and it cannot mix web search with
+        function tools at all.
 
         Args:
             messages: Prepared messages
             max_tokens: Max tokens to generate
             temperature: Temperature setting
+            effort: Reasoning effort, sent when the model supports it
             tools: Tools in Chat Completions shape (converted here)
 
         Returns:
@@ -422,7 +430,18 @@ class OpenAIService:
             "input": OpenAIMessageFormatter.format_for_responses_api(messages),
             "max_output_tokens": max_tokens,
             "stream": True,
+            # The Responses API keeps every response for 30 days unless told
+            # not to; Chat Completions never did.
+            "store": False,
         }
+
+        if self.is_reasoning:
+            # OpenAI decides per reply whether to send a summary; "detailed"
+            # gets one more often than "auto".
+            params["reasoning"] = {"summary": "detailed"}
+            resolved_effort = self.capabilities.resolve_effort(effort)
+            if resolved_effort:
+                params["reasoning"]["effort"] = resolved_effort
 
         tools = [await self._native_tool(tool) for tool in tools or []]
         responses_tools = OpenAIMessageFormatter.format_tools_for_responses_api(tools)

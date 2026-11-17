@@ -179,38 +179,11 @@ class OpenAIMessageFormatter:
         return converted
 
     @staticmethod
-    def format_for_responses_api(messages: List[Dict]) -> Union[str, List]:
+    def format_for_responses_api(messages: List[Dict]) -> List[Dict]:
         """
-        Format messages for OpenAI Responses API.
+        Build Responses API input items from the internal message history.
 
-        Args:
-            messages: List of message dictionaries
-
-        Returns:
-            String for plain text-only, list of input items once the history
-            carries tool turns or images
-        """
-        # Tool turns and images must stay structured: flattening tool turns
-        # drops the call_id linkage, and images need typed input parts.
-        if OpenAIMessageFormatter._has_tool_turns(
-            messages
-        ) or MessageFormatter.has_multimodal_content(messages):
-            return OpenAIMessageFormatter._build_tool_aware_input(messages)
-
-        return "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
-
-    @staticmethod
-    def _has_tool_turns(messages: List[Dict]) -> bool:
-        """Whether the history contains tool calls or tool results."""
-        return any(
-            msg.get("role") == "tool" or msg.get("tool_calls") for msg in messages
-        )
-
-    @staticmethod
-    def _build_tool_aware_input(messages: List[Dict]) -> List[Dict]:
-        """
-        Build Responses API input items from a history containing tool turns.
-
+        Every turn stays its own item, so the system prompt keeps its role.
         The internal schema is Chat Completions shaped — an assistant turn
         carrying ``tool_calls`` followed by one ``role:"tool"`` turn per
         result. The Responses API instead wants those as sibling input items:
