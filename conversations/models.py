@@ -715,11 +715,17 @@ class Conversation(BaseModel):
 
     def save(self, *args, **kwargs):
         if not self.conversation_id:
-            # Generate random 5-character ID only if no custom ID provided
-            self.conversation_id = "".join(
-                random.choices(string.ascii_uppercase + string.digits, k=5)
-            )
+            self.conversation_id = self._unused_conversation_id()
         super().save(*args, **kwargs)
+
+    @classmethod
+    def _unused_conversation_id(cls):
+        # Soft-deleted rows still hold their IDs, so check every row.
+        alphabet = string.ascii_uppercase + string.digits
+        while True:
+            candidate = "".join(random.choices(alphabet, k=16))
+            if not cls._base_manager.filter(conversation_id=candidate).exists():
+                return candidate
 
     def __str__(self):
         return f"Conversation {self.conversation_id}"

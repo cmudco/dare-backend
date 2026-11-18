@@ -1,8 +1,10 @@
+from unittest import mock
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from conversations.models import LLM
+from conversations.models import LLM, Conversation
 from core.services.claude_service import ClaudeService
 from core.services.openai_service import OpenAIService
 
@@ -145,3 +147,15 @@ class OpenAICapabilityPayloadTests(TestCase):
 
         self.assertEqual(params["max_completion_tokens"], 100)
         self.assertNotIn("temperature", params)
+
+
+class ConversationIdTests(TestCase):
+    def test_new_id_skips_one_held_by_a_soft_deleted_conversation(self):
+        Conversation.active_objects.create(conversation_id="TAKEN123", is_deleted=True)
+        rolls = iter([list("TAKEN123"), list("FRESH123")])
+        with mock.patch(
+            "conversations.models.random.choices",
+            side_effect=lambda *a, **k: next(rolls),
+        ):
+            conversation = Conversation.active_objects.create()
+        self.assertEqual(conversation.conversation_id, "FRESH123")
