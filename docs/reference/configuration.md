@@ -52,15 +52,15 @@ them differently for local development.
 
 ## LLM providers
 
-`OPENAI_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`, `PINECONE_API_KEY` and
-`PINECONE_INDEX_NAME` must be present in the environment, or startup fails with
-`ImproperlyConfigured`. An empty value is allowed and disables that provider.
+Every provider key is optional. A provider with no key here and none in Django admin
+(Provider API Keys) is unavailable: a request to one of its models fails with a clear
+error and the rest of DARE keeps working.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | **Required** (may be empty) | OpenAI API key, for GPT models. |
-| `CLAUDE_API_KEY` | **Required** (may be empty) | Anthropic API key, for Claude models. |
-| `GEMINI_API_KEY` | **Required** (may be empty) | Google AI API key, for Gemini models. |
+| `OPENAI_API_KEY` | *(none)* | OpenAI API key, for GPT models. |
+| `CLAUDE_API_KEY` | *(none)* | Anthropic API key, for Claude models. |
+| `GEMINI_API_KEY` | *(none)* | Google AI API key, for Gemini models. |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL for self-hosted LLaMA models. |
 | `BACKGROUND_MODEL` | `gpt-5.6-luna` | Model for titles, summaries, memory extraction and Advanced RAG query analysis. |
 | `LLM_STREAM_IDLE_TIMEOUT_SECONDS` | `120` | How long a provider stream may stay silent before the tool loop fails the round. |
@@ -131,8 +131,8 @@ preferences.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PINECONE_API_KEY` | **Required** (may be empty) | Pinecone API key. |
-| `PINECONE_INDEX_NAME` | **Required** (may be empty) | Pinecone index for document embeddings. |
+| `PINECONE_API_KEY` | *(none)* | Pinecone API key. |
+| `PINECONE_INDEX_NAME` | *(none)* | Pinecone index for document embeddings. |
 | `WEAVIATE_HOST` | `localhost` | Weaviate host. |
 | `WEAVIATE_PORT` | `8080` | Weaviate HTTP port. |
 | `WEAVIATE_GRPC_PORT` | `50051` | Weaviate gRPC port. Searches use gRPC, so remap it whenever you remap the HTTP port. |

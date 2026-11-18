@@ -67,7 +67,10 @@ from conversations.services.tool_loop_binding import ChatToolLoopBinding
 from conversations.services.tool_loop_service import ToolLoopResult, ToolLoopService
 from conversations.services.web_search_source_service import WebSearchSourceService
 from conversations.services.websocket_response_service import WebSocketResponseService
-from core.services.api_key_service import get_chat_dispatch_credentials
+from core.services.api_key_service import (
+    ProviderKeyMissing,
+    get_chat_dispatch_credentials,
+)
 from core.services.billing_service import BillingService
 from core.services.code_sandbox import sandbox_outputs, save_sandbox_file
 from core.services.conversation_service import ConversationService
@@ -1163,6 +1166,11 @@ class MessageCoordinator:
             )
         except BotModelUnavailable as error:
             await self.send_error(ErrorCode.BOT_MODEL_UNAVAILABLE, str(error))
+            return True
+        except ProviderKeyMissing:
+            await self.send_error(
+                ErrorCode.PROVIDER_NOT_CONFIGURED, ErrorMessage.PROVIDER_NOT_CONFIGURED
+            )
             return True
         except PaymentRequiredError as error:
             message = str(error)

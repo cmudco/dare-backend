@@ -182,6 +182,7 @@ class ErrorCode:
     INSUFFICIENT_BALANCE = "insufficient_balance"
     SPEND_LIMIT_REACHED = "spend_limit_reached"
     BOT_MODEL_UNAVAILABLE = "bot_model_unavailable"
+    PROVIDER_NOT_CONFIGURED = "provider_not_configured"
 
     # Processing errors
     PROCESSING_ERROR = "processing_error"
@@ -215,6 +216,10 @@ class ErrorMessage:
 
     # Processing errors
     PROCESSING_ERROR = "Failed to process message"
+    PROVIDER_NOT_CONFIGURED = (
+        "This model's provider is not set up on this server. Choose another model, "
+        "or ask an administrator to add its API key."
+    )
     AI_RESPONSE_ERROR = "Failed to generate AI response"
     STREAM_ERROR = "Failed to stream AI response"
     REGENERATE_ERROR = "Failed to regenerate response"
