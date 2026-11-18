@@ -1,5 +1,4 @@
 import logging
-from decimal import Decimal
 
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer, UserDetailsSerializer
@@ -7,14 +6,11 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from billing.constants import TransactionSourceChoice
-from billing.group_wallet import adopt_group_wallet
-from billing.models import Wallet
-from billing.services import WalletService
 from core.storage.constants import StorageBackendChoice
 from prompts.api.serializers import PromptSerializer
 from users.constants import AuthSourceChoice, RoleChoice, VectorDBChoice
 from users.models import AccessCodeGroup
+from users.services.onboarding_service import onboard_user
 from users.utils import detect_platform_from_request, get_platform_access_permission
 
 logger = logging.getLogger(__name__)
@@ -245,59 +241,12 @@ class CustomRegisterSerializer(RegisterSerializer):
         user.auth_source = platform
 
         access_code = self.validated_data.get("access_code")
-        code_group = None
-
-        if access_code:
-            try:
-                code_group = AccessCodeGroup.objects.get(access_code=access_code)
-                code_group.use_code()
-                user.access_code_group = code_group
-                # Assign platform role from access code's default_role
-                user.platform_role = code_group.default_role
-            except AccessCodeGroup.DoesNotExist:
-                pass
-
-        user.save()
-
-        # Members of a group that was issued a LiteLLM key route through it by
-        # default. Their own wallet and credit below are untouched — this sets
-        # the default provider, not a restriction.
-        adopt_group_wallet(user)
-
-        # Apply initial wallet credit with a single transaction
-        # - If access code has an initial_wallet_credit, grant exactly that amount
-        # - Otherwise grant the default $5.00
-        try:
-            # Ensure wallet exists with $0 from signal; create with $0 if missing
-            wallet = getattr(user, "wallet", None)
-            if wallet is None:
-                wallet = Wallet.objects.create(user=user, balance=Decimal("0.00"))
-
-            if (
-                code_group
-                and getattr(code_group, "initial_wallet_credit", None) is not None
-            ):
-                initial_amount = Decimal(code_group.initial_wallet_credit)
-                message = f"Initial credit via access code '{code_group.access_code}'"
-            else:
-                initial_amount = Decimal("5.00")
-                message = "Initial wallet credit"
-
-            # Credit exactly the intended amount (wallet starts at $0)
-            if initial_amount > Decimal("0.00"):
-                WalletService.add_topup(
-                    user,
-                    amount=initial_amount,
-                    message=message,
-                    source=TransactionSourceChoice.REGISTRATION,
-                    related_group=code_group,
-                )
-        except Exception:
-            # Do not block registration if crediting fails
-            logger.exception(
-                f"Failed to apply initial wallet credit for user {user.id}"
-            )
-            pass
+        code_group = (
+            AccessCodeGroup.objects.filter(access_code=access_code).first()
+            if access_code
+            else None
+        )
+        onboard_user(user, code_group)
         return user
 
 
@@ -351,3 +300,12 @@ class CustomLoginSerializer(LoginSerializer):
                 logger.error(f"Multiple accounts match login email {email}")
 
         return super().validate(attrs)
+
+
+class SsoConfigSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    label = serializers.CharField()
+
+
+class SsoCodeSerializer(serializers.Serializer):
+    code = serializers.CharField()

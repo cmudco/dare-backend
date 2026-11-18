@@ -91,6 +91,7 @@ THIRD_PARTY_APPS = [
     "allauth",
     "allauth.account",
     "allauth.socialaccount",
+    "allauth.socialaccount.providers.openid_connect",
     "dj_rest_auth",
     "dj_rest_auth.registration",
     "channels",
@@ -227,6 +228,38 @@ ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_EMAIL_REQUIRED = True
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_ADAPTER = "users.adapter.AccountAdapter"
+
+# OpenID Connect single sign-on. The identity provider is the deployment's own,
+# so an address it asserts needs no confirmation email and signs in the DARE
+# account that already has it.
+SOCIALACCOUNT_ADAPTER = "users.adapter.SocialAccountAdapter"
+SOCIALACCOUNT_LOGIN_ON_GET = True
+SOCIALACCOUNT_EMAIL_VERIFICATION = "none"
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
+SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = True
+SOCIALACCOUNT_PROVIDERS = {
+    "openid_connect": {
+        "OAUTH_PKCE_ENABLED": True,
+        "SCOPE": env.OIDC_SCOPES,
+        "APPS": (
+            [
+                {
+                    "provider_id": env.OIDC_PROVIDER_ID,
+                    "name": env.OIDC_PROVIDER_NAME,
+                    "client_id": env.OIDC_CLIENT_ID,
+                    "secret": env.OIDC_CLIENT_SECRET,
+                    "settings": {"server_url": env.OIDC_SERVER_URL},
+                }
+            ]
+            if env.OIDC_SERVER_URL and env.OIDC_CLIENT_ID
+            else []
+        ),
+    }
+}
+# The redirect URI sent to the identity provider must match the registered one;
+# behind a TLS-terminating proxy the request itself looks like plain http.
+if (env.DARE_BACKEND_URL or "").startswith("https://"):
+    ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
 
 # Signed with the key Research Tools also uses, and identified by email rather
 # than primary key, so a token from either product authenticates against both.
