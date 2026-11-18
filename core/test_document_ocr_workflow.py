@@ -60,6 +60,12 @@ def make_request(**overrides):
 @override_settings()
 class DocumentOcrWorkflowTests(SimpleTestCase):
     def setUp(self):
+        flag = patch(
+            "core.services.document_ocr_workflow_service.is_flag_enabled_for_user",
+            return_value=True,
+        )
+        flag.start()
+        self.addCleanup(flag.stop)
         self.service = DocumentOcrWorkflowService()
         self.model = SimpleNamespace(
             model=SimpleNamespace(identifier="gemini-vision"),

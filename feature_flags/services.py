@@ -27,6 +27,9 @@ def is_flag_enabled_for_user(user: "User", key: str) -> bool:
     flag = FeatureFlag.objects.filter(key=key).only("id", "default_enabled").first()
     if flag is None:
         return False
+    if user is None:
+        # Anonymous sessions (public bots) follow the app-wide value.
+        return bool(flag.default_enabled)
 
     user_override = (
         UserFeatureOverride.objects.filter(user_id=user.id, flag_id=flag.id)

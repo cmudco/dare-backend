@@ -131,6 +131,17 @@ Transactional emails (registration, password reset, confirmations) use django-al
 2. Copy the allauth template you want to change into `templates/account/email/`.
 3. Edit the branding and copy.
 
+### Turning features off
+
+Feature flags live in the admin under **Feature flags** (`/admin/feature_flags/featureflag/`). Untick **Default enabled** to turn a feature off for everyone; group and user overrides on the same page take precedence over the default.
+
+Two flags cover the document features a deployment may not be able to run:
+
+| Flag | When off |
+|---|---|
+| `enable_rag` | Sources, Knowledge graphs and every source picker (chat, projects, agents, workflows) are hidden. Uploads are refused, and a message or workflow step runs without its attached documents. Existing files are kept. |
+| `enable_ocr` | Scanned pages are not transcribed and figures are not described. Documents are indexed from their readable text only, and the transcription request is refused. |
+
 ### Storage
 
 File uploads land in Django's `MEDIA_ROOT` (`<repo>/media`). Each user's `storage_backend` picks local filesystem (the default) or SyftBox for new uploads. For multi-instance deployments, mount a shared filesystem at `MEDIA_ROOT`.
