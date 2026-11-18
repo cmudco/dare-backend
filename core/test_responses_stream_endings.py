@@ -5,10 +5,12 @@ from django.test import SimpleTestCase
 from google.genai.types import FinishReason
 
 from core.services.dtos.stream_event_dto import StreamEventKind
-from core.services.llm_utils.stream_processors import (OUT_OF_TOKENS_NOTE,
-                                                       ClaudeStreamProcessor,
-                                                       GeminiStreamProcessor,
-                                                       OpenAIStreamProcessor)
+from core.services.llm_utils.stream_processors import (
+    OUT_OF_TOKENS_NOTE,
+    ClaudeStreamProcessor,
+    GeminiStreamProcessor,
+    OpenAIStreamProcessor,
+)
 
 
 def _stream(*chunks):
@@ -133,3 +135,24 @@ class OutOfTokensAcrossProvidersTests(SimpleTestCase):
         )
 
         self.assertEqual(text, OUT_OF_TOKENS_NOTE)
+
+    def test_gemini_thinking_stays_out_of_the_answer(self):
+        text = _collect(
+            GeminiStreamProcessor.process_stream,
+            SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(text="Weighing it", thought=True),
+                                SimpleNamespace(text="Done", thought=None),
+                            ]
+                        ),
+                    )
+                ],
+                usage_metadata=None,
+            ),
+        )
+
+        self.assertEqual(text, "Done")
