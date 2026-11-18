@@ -719,7 +719,7 @@ class Conversation(BaseModel):
         super().save(*args, **kwargs)
 
     @classmethod
-    def _unused_conversation_id(cls):
+    def _unused_conversation_id(cls) -> str:
         # Soft-deleted rows still hold their IDs, so check every row.
         alphabet = string.ascii_uppercase + string.digits
         while True:
