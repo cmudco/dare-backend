@@ -7,6 +7,8 @@ from typing import Optional
 from config import env
 from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.vision_model_service import resolve_vision_model, select_vision_model
+from feature_flags.constants import ENABLE_OCR
+from feature_flags.services import is_flag_enabled_for_user
 from files.constants import DocumentOcrStatus
 from files.models import DocumentOcrRequest, File
 
@@ -141,4 +143,5 @@ class DocumentOcrWorkflowService:
             and parsed.parser == "docling"
             and parsed.is_page_based
             and (file.file.name or "").lower().endswith(".pdf")
+            and is_flag_enabled_for_user(file.user, ENABLE_OCR)
         )

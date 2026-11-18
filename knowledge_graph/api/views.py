@@ -11,6 +11,7 @@ from rq.job import Job, JobStatus
 
 from core.services.rag import build_pipeline
 from core.services.rag.dtos import RetrievalRequest
+from feature_flags.permissions import IsRagEnabled
 from files.models import File, Folder
 from knowledge_graph.api.serializers import (
     ApproveSerializer,
@@ -44,7 +45,7 @@ ASK_TOP_K = 4
 
 
 class KnowledgeGraphViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsRagEnabled]
 
     def _graph(self, pk) -> KnowledgeGraph:
         return get_object_or_404(KnowledgeGraph, pk=pk, user=self.request.user)

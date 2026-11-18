@@ -17,6 +17,8 @@ from core.services.dtos import LLMQueryRequestBuilder
 from core.services.llm_helpers.retrieval_targets import ChatRetrievalTarget
 from core.services.tool_loop.binding import ArtifactHost
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
+from feature_flags.constants import ENABLE_RAG
+from feature_flags.services import is_flag_enabled_for_user
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.base import (ExecutionNode, NodeExecutionContext,
                                      NodeExecutionResult)
@@ -381,6 +383,9 @@ class StepNodeHandler(BaseExecutionHandler):
                 content_file_ids = config['content_file_ids']
                 if context.batch_file_id not in content_file_ids:
                     config['content_file_ids'] = [context.batch_file_id] + content_file_ids
+            if not is_flag_enabled_for_user(workflow.user, ENABLE_RAG):
+                for key in ('content_file_ids', 'embedding_file_ids', 'tag_ids', 'library_ids'):
+                    config[key] = []
             return config
 
         return await database_sync_to_async(_get_config)()

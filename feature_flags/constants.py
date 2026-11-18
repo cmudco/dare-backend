@@ -8,6 +8,9 @@ e.g. ``enable_byok`` -> ``enableByok``.
 production tier (DARE production) so behavior is preserved on rollout.
 """
 
+ENABLE_RAG = "enable_rag"
+ENABLE_OCR = "enable_ocr"
+
 DEFAULT_FLAG_DEFINITIONS = [
     {
         "key": "enable_byok",
@@ -79,6 +82,25 @@ DEFAULT_FLAG_DEFINITIONS = [
     {
         "key": "enable_research_tools",
         "description": "Show the Research Tools link in the sidebar.",
+        "default_enabled": True,
+    },
+    {
+        "key": ENABLE_RAG,
+        "description": (
+            "Document sources: uploads, search over documents in chat, "
+            "projects, agents and workflows, and knowledge graphs. When "
+            "disabled, the UI hides them and the backend refuses uploads and "
+            "ignores sources attached to a message."
+        ),
+        "default_enabled": True,
+    },
+    {
+        "key": ENABLE_OCR,
+        "description": (
+            "Vision transcription of scanned pages and figure descriptions "
+            "during document processing. When disabled, documents are indexed "
+            "from their readable text only."
+        ),
         "default_enabled": True,
     },
 ]
