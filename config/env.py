@@ -74,12 +74,12 @@ OIDC_ACCESS_CODE = env("OIDC_ACCESS_CODE", default="")
 OIDC_GROUPS_CLAIM = env("OIDC_GROUPS_CLAIM", default="groups")
 OIDC_ROLE_MAP = env.json("OIDC_ROLE_MAP", default={})
 
-PINECONE_API_KEY = env("PINECONE_API_KEY")
-PINECONE_INDEX_NAME = env("PINECONE_INDEX_NAME")
-OPENAI_API_KEY = env("OPENAI_API_KEY")
+PINECONE_API_KEY = env("PINECONE_API_KEY", default="")
+PINECONE_INDEX_NAME = env("PINECONE_INDEX_NAME", default="")
+OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 BACKGROUND_MODEL = os.getenv("BACKGROUND_MODEL", "gpt-5.6-luna")
-CLAUDE_API_KEY = env("CLAUDE_API_KEY")
-GEMINI_API_KEY = env("GEMINI_API_KEY")
+CLAUDE_API_KEY = env("CLAUDE_API_KEY", default="")
+GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 OLLAMA_HOST = env("OLLAMA_HOST", default="http://localhost:11434")
 
 # Embeddings: any OpenAI-compatible /v1/embeddings endpoint. Documents and
