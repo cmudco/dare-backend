@@ -242,6 +242,70 @@ Used for unified authentication, email links and inter-service calls.
 | `SOCRATIC_BOTS_BACKEND_URL` | *(none)* | Socratic Bots backend URL (optional). |
 | `DARE_INTERNAL_KEY` | `local-dev-internal-key` | Shared secret for partner backends calling internal endpoints. Replace it in production. |
 
+## Single sign-on (OpenID Connect)
+
+Users can sign in through the deployment's own identity provider (Entra ID, Okta, Keycloak
+or any OpenID Connect provider). It is on when `OIDC_SERVER_URL` and `OIDC_CLIENT_ID` are
+both set; the login page then shows a "Sign in with …" button beside the password form.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OIDC_SERVER_URL` | *(empty)* | The provider's issuer URL. DARE reads `/.well-known/openid-configuration` under it. |
+| `OIDC_CLIENT_ID` | *(empty)* | Client ID of the app registered for DARE. |
+| `OIDC_CLIENT_SECRET` | *(empty)* | That app's client secret. |
+| `OIDC_PROVIDER_ID` | `sso` | Short name used in the redirect URL. |
+| `OIDC_PROVIDER_NAME` | `SSO` | Label on the sign-in button. |
+| `OIDC_SCOPES` | `openid,profile,email` | Scopes requested. Okta needs `groups` added to send group membership. |
+| `OIDC_ALLOWED_EMAIL_DOMAINS` | *(any)* | Comma-separated email domains allowed to sign in. |
+| `OIDC_AUTO_CREATE_USERS` | `True` | Create a DARE account on a person's first sign-in. `False` admits only people who already have one. |
+| `OIDC_ACCESS_CODE` | *(none)* | Access code of the group new SSO users join, which sets their wallet credit and any group LiteLLM key. |
+| `OIDC_GROUPS_CLAIM` | `groups` | Claim that lists the user's groups. |
+| `OIDC_ROLE_MAP` | `{}` | JSON object from provider group to DARE role, e.g. `{"dare-admins":"SUPERADMIN","dare-staff":"USER"}`. |
+
+Register this redirect URL with the provider, as a confidential web application using the
+authorization code flow:
+
+```text
+<DARE_BACKEND_URL>/account/oidc/<OIDC_PROVIDER_ID>/login/callback/
+```
+
+`DARE_BACKEND_URL` and `DARE_FRONTEND_URL` must be set: the first decides whether the
+redirect URL is sent as `https`, the second is where the user lands after signing in.
+
+How accounts are matched and created:
+
+- A person is recognised by the provider's subject ID. On a first sign-in, an existing DARE
+  account with the same email is linked instead of duplicated.
+- The provider is trusted to assert email addresses, so register DARE as a single-tenant
+  app. A sign-in whose `email_verified` claim is `false`, or that has no email, is refused.
+- With `OIDC_ROLE_MAP` set, the role is recomputed on every sign-in: the highest role among
+  the user's mapped groups, or `USER` when none is mapped. Keys must match the claim's
+  values exactly (Entra ID sends group object IDs, not names). Leave it empty to manage
+  roles in DARE.
+- Groups are read from the ID token and the userinfo response.
+
+To try it locally, `devops/keycloak/city-test-realm.json` is a Keycloak realm with a `dare`
+client, three groups and five test users (`admin`, `supervisor`, `staff`, `existing` at
+`city.test`, and `outsider@other.test`). It holds no credentials: choose them when you
+start Keycloak.
+
+```bash
+docker run -d --name dare-keycloak -p 8081:8080 \
+  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=<admin password> \
+  -e KC_TEST_USER_PASSWORD=<password for the test users> \
+  -e KC_TEST_CLIENT_SECRET=<client secret> \
+  -v "$PWD/devops/keycloak:/opt/keycloak/data/import:ro" \
+  quay.io/keycloak/keycloak:26.8.2 start-dev --import-realm
+```
+
+```bash
+OIDC_PROVIDER_ID=city
+OIDC_SERVER_URL=http://localhost:8081/realms/city-test
+OIDC_CLIENT_ID=dare
+OIDC_CLIENT_SECRET=<the same client secret>
+OIDC_ROLE_MAP={"city-admins":"SUPERADMIN","city-supervisors":"SUPERVISOR"}
+```
+
 ## Research mode (Hermes)
 
 | Variable | Default | Description |

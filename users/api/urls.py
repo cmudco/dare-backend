@@ -15,6 +15,12 @@ from users.api.views import (
     InternalVoiceAccessCodeView,
     token_health_check,
 )
+from users.api.oidc_views import (
+    SsoConfigView,
+    SsoTokenView,
+    sso_complete,
+    sso_login,
+)
 from users.constants import APP_NAME
 
 app_name = APP_NAME
@@ -35,6 +41,11 @@ urlpatterns = [
     ),
     path("dj-rest-auth/", include("dj_rest_auth.urls")),
     path("dj-rest-auth/registration/", include("dj_rest_auth.registration.urls")),
+
+    path("sso/config/", SsoConfigView.as_view(), name="sso-config"),
+    path("sso/login/", sso_login, name="sso-login"),
+    path("sso/complete/", sso_complete, name="sso-complete"),
+    path("sso/token/", SsoTokenView.as_view(), name="sso-token"),
 
     path("account/", AccountDeletionView.as_view(), name="account-delete"),
     path("stats/", UserStatsView.as_view(), name="user-stats"),

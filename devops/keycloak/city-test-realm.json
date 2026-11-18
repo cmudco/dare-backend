@@ -1,0 +1,135 @@
+{
+  "realm": "city-test",
+  "enabled": true,
+  "groups": [
+    {
+      "name": "city-admins"
+    },
+    {
+      "name": "city-supervisors"
+    },
+    {
+      "name": "city-staff"
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@city.test",
+      "email": "admin@city.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Ada",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_TEST_USER_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/city-admins"
+      ]
+    },
+    {
+      "username": "supervisor@city.test",
+      "email": "supervisor@city.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Sam",
+      "lastName": "Supervisor",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_TEST_USER_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/city-supervisors",
+        "/city-staff"
+      ]
+    },
+    {
+      "username": "staff@city.test",
+      "email": "staff@city.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Stef",
+      "lastName": "Staff",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_TEST_USER_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/city-staff"
+      ]
+    },
+    {
+      "username": "existing@city.test",
+      "email": "existing@city.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Eli",
+      "lastName": "Existing",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_TEST_USER_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/city-staff"
+      ]
+    },
+    {
+      "username": "outsider@other.test",
+      "email": "outsider@other.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Olu",
+      "lastName": "Outsider",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_TEST_USER_PASSWORD}",
+          "temporary": false
+        }
+      ],
+      "groups": []
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "dare",
+      "name": "DARE",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${KC_TEST_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8000/account/oidc/city/login/callback/",
+        "http://127.0.0.1:8000/account/oidc/city/login/callback/"
+      ],
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}
