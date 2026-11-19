@@ -49,18 +49,16 @@ class OpenAIUsageExtractor:
         Returns:
             Usage dictionary or None
         """
-        if not hasattr(chunk, "usage") or chunk.usage is None:
+        usage = getattr(chunk, "usage", None)
+        if usage is None:
             return None
 
-        usage = UsageExtractor.build_usage_dict(
-            input_tokens=chunk.usage.prompt_tokens,
-            output_tokens=chunk.usage.completion_tokens,
+        return OpenAIUsageExtractor._with_cached_tokens(
+            UsageExtractor.build_usage_dict(
+                usage.prompt_tokens, usage.completion_tokens
+            ),
+            getattr(usage, "prompt_tokens_details", None),
         )
-        details = getattr(chunk.usage, "prompt_tokens_details", None)
-        cached = getattr(details, "cached_tokens", None)
-        if usage is not None and cached:
-            usage["cached_input_tokens"] = int(cached)
-        return usage
 
     @staticmethod
     def extract_from_responses_api(chunk) -> Optional[Dict]:
@@ -73,20 +71,19 @@ class OpenAIUsageExtractor:
         Returns:
             Usage dictionary or None
         """
-        if not hasattr(chunk, "response"):
+        usage = getattr(getattr(chunk, "response", None), "usage", None)
+        if usage is None:
             return None
 
-        response = chunk.response
-        if not hasattr(response, "usage") or response.usage is None:
-            return None
+        return OpenAIUsageExtractor._with_cached_tokens(
+            UsageExtractor.build_usage_dict(usage.input_tokens, usage.output_tokens),
+            getattr(usage, "input_tokens_details", None),
+        )
 
-        usage_obj = response.usage
-        input_tokens = getattr(usage_obj, "input_tokens", None)
-        output_tokens = getattr(usage_obj, "output_tokens", None)
-
-        usage = UsageExtractor.build_usage_dict(input_tokens, output_tokens)
-        details = getattr(usage_obj, "input_tokens_details", None)
-        cached = getattr(details, "cached_tokens", None)
+    @staticmethod
+    def _with_cached_tokens(usage: Optional[Dict], input_details) -> Optional[Dict]:
+        """Add the cached share of the prompt, which bills at the cached rate."""
+        cached = getattr(input_details, "cached_tokens", None)
         if usage is not None and cached:
             usage["cached_input_tokens"] = int(cached)
         return usage
