@@ -68,6 +68,16 @@ class ResponsesStreamEndingTests(SimpleTestCase):
 
         self.assertEqual(text, "Error: server overloaded")
 
+    def test_reasoning_summary_stays_out_of_the_answer(self):
+        text, _ = _run(
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta", delta="Weighing it"
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="Done"),
+        )
+
+        self.assertEqual(text, "Done")
+
 
 def _collect(processor, *chunks):
     async def collect():

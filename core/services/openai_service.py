@@ -14,7 +14,6 @@ from typing import AsyncGenerator, Dict, List, Optional, Sequence, Tuple, Type, 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.code_sandbox import (
@@ -77,7 +76,6 @@ class OpenAIService:
                 through a LiteLLM proxy (or any other OpenAI-compatible
                 gateway); leave ``None`` for direct calls to api.openai.com.
         """
-        # Use provided key or fetch from provider key service
         if api_key is None:
             api_key = get_provider_api_key(llm.provider)
 
@@ -113,6 +111,12 @@ class OpenAIService:
             return True
         return self.model.startswith(("gpt-5", "o1", "o3", "o4"))
 
+    def _token_limit(self, max_tokens: int) -> Dict[str, int]:
+        """The Chat Completions output cap under the name this model accepts."""
+        if self._uses_max_completion_tokens():
+            return {"max_completion_tokens": max_tokens}
+        return {"max_tokens": max_tokens}
+
     def _uses_responses_api(self, tools: Optional[List[Dict]]) -> bool:
         """
         Determine whether this request should go through the Responses API.
@@ -120,6 +124,10 @@ class OpenAIService:
         Anything tool-shaped belongs there: it is the only OpenAI surface that
         accepts function tools on reasoning models (the whole GPT-5.x family)
         and the only one that can run web search alongside them.
+
+        Reasoning models go there too, with or without tools: it is the only
+        surface that streams their thinking summaries, and Chat Completions
+        stays silent for as long as they think.
 
         The exception is a custom ``base_url``, which means we are talking to a
         LiteLLM proxy or another OpenAI-compatible gateway rather than OpenAI
@@ -132,7 +140,7 @@ class OpenAIService:
         Returns:
             True when the Responses API should be used
         """
-        return bool(tools) and self.base_url is None
+        return (bool(tools) or self.is_reasoning) and self.base_url is None
 
     async def stream_chat_completion(
         self,
@@ -140,22 +148,20 @@ class OpenAIService:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         effort: Optional[str] = None,
-        images: List[Dict] = None,
+        images: Optional[List[Dict]] = None,
         tools: Optional[List[Dict]] = None,
         allow_tool_calls: bool = True,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
-        Stream chat completions from OpenAI's GPT model.
-
-        This is the main public method for streaming responses. It orchestrates
-        the entire streaming process with clear separation of concerns.
+        Stream one model turn as provider-agnostic events.
 
         Args:
             messages: List of message dictionaries with 'role' and 'content'
             max_tokens: Maximum number of tokens to generate
             temperature: Controls randomness (0.0 to 1.0)
+            effort: Reasoning effort, sent when the model supports it
             images: List of image dicts for vision support
-            tools: Optional tools list for web search
+            tools: Function tools and the web search marker for this turn
             allow_tool_calls: False on a tool loop's forced final round; the
                 tools stay in the request but the model may not call them
 
@@ -163,38 +169,29 @@ class OpenAIService:
             LLMStreamEvent
         """
         try:
-            # Step 1: Prepare messages with vision if needed
             prepared_messages = self._prepare_messages(messages, images)
 
-            # Step 2: Create appropriate stream (Responses API vs Chat Completions).
-            # The Responses API takes web search and function tools together, so
-            # a mixed turn no longer has to drop either one.
             if self._uses_responses_api(tools):
                 response = await self._stream_responses_api(
                     prepared_messages,
                     max_tokens,
                     temperature,
+                    effort,
                     tools,
                     allow_tool_calls,
                 )
                 processor = OpenAIStreamProcessor.process_responses_api_stream
             else:
-                # Chat Completions has no web search tool; drop the marker so it
-                # does not reach the API as an unknown tool type.
-                non_web_tools = [
-                    t for t in (tools or []) if t.get("type") != "web_search"
-                ]
                 response = await self._stream_chat_completions(
                     prepared_messages,
                     max_tokens,
                     temperature,
                     effort,
-                    non_web_tools or None,
+                    tools,
                     allow_tool_calls,
                 )
                 processor = OpenAIStreamProcessor.process_chat_completion_stream
 
-            # Step 3: Process and yield stream events
             async for event in processor(response):
                 if event.usage and event.usage.get("sandbox_citations"):
                     await self._collect_sandbox_outputs(event.usage)
@@ -295,12 +292,8 @@ class OpenAIService:
             "model": self.model,
             "messages": messages,
             "response_format": response_format,
+            **self._token_limit(max_tokens),
         }
-
-        if self._uses_max_completion_tokens():
-            params["max_completion_tokens"] = max_tokens
-        else:
-            params["max_tokens"] = max_tokens
 
         self._apply_openai_sampling(params, temperature, effort)
 
@@ -342,11 +335,8 @@ class OpenAIService:
             "model": self.model,
             "messages": messages,
             "response_format": response_model,
+            **self._token_limit(max_tokens),
         }
-        if self._uses_max_completion_tokens():
-            params["max_completion_tokens"] = max_tokens
-        else:
-            params["max_tokens"] = max_tokens
 
         self._apply_openai_sampling(params, 0.0)
         response = await self.client.chat.completions.parse(**params)
@@ -372,8 +362,6 @@ class OpenAIService:
         finally:
             self._client = None
 
-    # ==================== Private Methods ====================
-
     def _prepare_messages(
         self, messages: List[Dict], images: Optional[List[Dict]]
     ) -> List[Dict]:
@@ -397,21 +385,24 @@ class OpenAIService:
         messages: List[Dict[str, str]],
         max_tokens: int,
         temperature: float,
+        effort: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         allow_tool_calls: bool = True,
     ):
         """
         Stream using the Responses API.
 
-        This is the path for anything tool-shaped: web search, function calling,
-        or both together. Chat Completions rejects function tools on reasoning
-        models (the whole GPT-5.x family) unless reasoning is disabled, and it
-        cannot mix web search with function tools at all.
+        This is the path for reasoning models and for anything tool-shaped:
+        web search, function calling, or both together. Chat Completions
+        rejects function tools on reasoning models (the whole GPT-5.x family)
+        unless reasoning is disabled, and it cannot mix web search with
+        function tools at all.
 
         Args:
             messages: Prepared messages
             max_tokens: Max tokens to generate
             temperature: Temperature setting
+            effort: Reasoning effort, sent when the model supports it
             tools: Tools in Chat Completions shape (converted here)
 
         Returns:
@@ -422,16 +413,28 @@ class OpenAIService:
             "input": OpenAIMessageFormatter.format_for_responses_api(messages),
             "max_output_tokens": max_tokens,
             "stream": True,
+            # The Responses API keeps every response for 30 days unless told
+            # not to; Chat Completions never did.
+            "store": False,
         }
 
-        tools = [await self._native_tool(tool) for tool in tools or []]
-        responses_tools = OpenAIMessageFormatter.format_tools_for_responses_api(tools)
-        if responses_tools:
-            params["tools"] = responses_tools
+        native_tools = [await self._native_tool(tool) for tool in tools or []]
+        if native_tools:
+            params["tools"] = OpenAIMessageFormatter.format_tools_for_responses_api(
+                native_tools
+            )
             if not allow_tool_calls:
                 params["tool_choice"] = "none"
-        if any(tool.get("type") == OPENAI_CODE_INTERPRETER for tool in tools):
+        if any(tool.get("type") == OPENAI_CODE_INTERPRETER for tool in native_tools):
             params["include"] = ["code_interpreter_call.outputs"]
+
+        if self.is_reasoning:
+            # OpenAI decides per reply whether to send a summary; "detailed"
+            # gets one more often than "auto".
+            params["reasoning"] = {"summary": "detailed"}
+            resolved_effort = self.capabilities.resolve_effort(effort)
+            if resolved_effort:
+                params["reasoning"]["effort"] = resolved_effort
 
         if self.capabilities.supports_temperature:
             params["temperature"] = temperature
@@ -467,24 +470,31 @@ class OpenAIService:
         allow_tool_calls: bool = True,
     ):
         """
-        Stream using Chat Completions API.
+        Stream using the Chat Completions API.
+
+        Chat Completions has no web search tool, so the marker is dropped
+        rather than sent as an unknown tool type.
 
         Args:
             messages: Prepared messages
             max_tokens: Max tokens to generate
             temperature: Temperature setting
+            effort: Reasoning effort, sent when the model supports it
             tools: Optional tools for function calling
 
         Returns:
             OpenAI Chat Completions stream
         """
-        kwargs = self._build_chat_completion_params(
-            messages, max_tokens, temperature, effort, tools
+        function_tools = [
+            tool for tool in tools or [] if tool.get("type") != "web_search"
+        ]
+        params = self._build_chat_completion_params(
+            messages, max_tokens, temperature, effort, function_tools
         )
-        if "tools" in kwargs and not allow_tool_calls:
-            kwargs["tool_choice"] = "none"
+        if "tools" in params and not allow_tool_calls:
+            params["tool_choice"] = "none"
 
-        return await self.client.chat.completions.create(**kwargs)
+        return await self.client.chat.completions.create(**params)
 
     def _apply_openai_sampling(
         self,
@@ -520,6 +530,7 @@ class OpenAIService:
             messages: List of messages
             max_tokens: Max tokens to generate
             temperature: Temperature setting
+            effort: Reasoning effort, sent when the model supports it
             tools: Optional tools for function calling
 
         Returns:
@@ -530,20 +541,13 @@ class OpenAIService:
             "messages": messages,
             "stream": True,
             "stream_options": {"include_usage": True},
+            **self._token_limit(max_tokens),
         }
-
-        # Reasoning models use different parameter names
-        if self._uses_max_completion_tokens():
-            params["max_completion_tokens"] = max_tokens
-        else:
-            params["max_tokens"] = max_tokens
 
         self._apply_openai_sampling(params, temperature, effort)
 
-        # Add tools if provided (for function calling like MCP)
         if tools:
             params["tools"] = tools
-            # Let LLM decide when to use tools (auto) - only required for specific use cases
             params["tool_choice"] = "auto"
 
         return params
@@ -561,16 +565,9 @@ class OpenAIService:
         Returns:
             Extracted field value as string
         """
-        logger.info(
-            f"[OpenAI] _get_structured_completion called with model: {self.model}, "
-            f"spec: {structured_spec}"
-        )
-
         response_format = SchemaTransformer.transform_for_openai(structured_spec)
-        logger.info(f"[OpenAI] Transformed response_format: {response_format}")
 
         if not response_format:
-            # Fallback to regular completion
             logger.warning(
                 "[OpenAI] No response_format generated, falling back to streaming"
             )
@@ -578,23 +575,12 @@ class OpenAIService:
             return await StreamAggregator.aggregate_stream(stream)
 
         try:
-            logger.info(
-                "[OpenAI] Calling native structured output API with response_format"
-            )
             response = await self._generate_with_chat_completions_structure(
                 messages, response_format
             )
-            logger.info(
-                f"[OpenAI] Native API response received: {str(response)[:200]}..."
-            )
-
-            extracted_value = SchemaTransformer.extract_field_value(
-                response, structured_spec
-            )
-            logger.info(f"[OpenAI] Extracted field value: {extracted_value}")
-            return extracted_value
+            return SchemaTransformer.extract_field_value(response, structured_spec)
         except Exception as e:
-            logger.error(f"OpenAI structured output error: {str(e)}", exc_info=True)
+            logger.exception("OpenAI structured output error")
             error_message = OpenAIErrorHandler.format_error(e)
             return f"Error: {error_message}"
 
@@ -618,13 +604,8 @@ class OpenAIService:
             "model": self.model,
             "messages": messages,
             "response_format": response_format,
+            **self._token_limit(1024),
         }
-
-        if self._uses_max_completion_tokens():
-            params["max_completion_tokens"] = 1024
-        else:
-            params["max_tokens"] = 1024
-
         self._apply_openai_sampling(params, 0.0)
 
         return await self.client.chat.completions.create(**params)
@@ -701,8 +682,6 @@ class OpenAIService:
             + details.image_tokens * GPT_IMAGE_IMAGE_INPUT_RATE
             + usage.output_tokens * GPT_IMAGE_OUTPUT_RATE
         ) / Decimal(1_000_000)
-
-    # ==================== Static Methods ====================
 
     @staticmethod
     def get_web_search_tool() -> Dict:
