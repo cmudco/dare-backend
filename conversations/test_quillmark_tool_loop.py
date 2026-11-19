@@ -40,7 +40,7 @@ class _QuillmarkChainLLMService:
             context_trace=None,
         )
 
-    async def stream_round(self, prepared, messages, tools):
+    async def stream_round(self, prepared, messages, tools, allow_tool_calls=True):
         self.round_messages.append([dict(message) for message in messages])
         round_index = len(self.round_messages)
         if round_index == 1:
@@ -130,7 +130,7 @@ class _ClaudeInterleavedLLMService:
             context_trace=None,
         )
 
-    async def stream_round(self, prepared, messages, tools):
+    async def stream_round(self, prepared, messages, tools, allow_tool_calls=True):
         self.round_messages.append([dict(message) for message in messages])
         if len(self.round_messages) == 1:
             for index, block in enumerate(self.provider_content):
@@ -189,7 +189,7 @@ class _ClaudeWebThenDareLLMService:
             context_trace=None,
         )
 
-    async def stream_round(self, prepared, messages, tools):
+    async def stream_round(self, prepared, messages, tools, allow_tool_calls=True):
         self.round_messages.append([dict(message) for message in messages])
         if len(self.round_messages) == 1:
             for index, block in enumerate(self.provider_content):

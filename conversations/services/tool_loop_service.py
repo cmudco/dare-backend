@@ -11,8 +11,12 @@ synthesis call with tools stripped and results flattened into a prose user
 message). Here the model keeps its tools across rounds, sees results as
 provider-native ``role:"tool"`` turns, and can chain calls — search, read,
 search again, then chart. Once the ``ToolLoopConfig`` bounds are reached
-(``MAX_TOOL_ROUNDS`` by default) the next call runs with tools stripped,
-forcing a final text answer, so termination is guaranteed.
+(``MAX_TOOL_ROUNDS`` by default) the next call keeps the same tools but
+forbids calling them, forcing a final text answer, so termination is
+guaranteed. The tools stay in the request because providers bind a turn's
+earlier output to them: withdrawing them mid-turn made Claude answer with
+nothing and Gemini call a tool anyway. A short note tells the model the
+budget is spent, since one stopped mid-task otherwise ends its turn silently.
 
 Text accumulates ACROSS rounds (post-tool text appends after a paragraph
 break instead of replacing what the user already read), usage accumulates
@@ -50,6 +54,7 @@ from core.services.dtos import (
 )
 from core.services.llm_helpers.tool_turn_helpers import (
     build_assistant_tool_call_turn,
+    build_tool_budget_spent_turn,
     build_tool_result_turn,
     synthesize_tool_call_id,
 )
@@ -108,14 +113,16 @@ class ToolLoopService:
             os.environ.get("LLM_SANDBOX_IDLE_TIMEOUT_SECONDS", "300")
         )
 
-    async def _stream_round(self, prepared, messages, tools):
+    async def _stream_round(self, prepared, messages, tools, allow_tool_calls=True):
         """Yield provider events, failing when a stream goes silent.
 
         The timeout resets after every event, so healthy long responses are
         unaffected. It specifically bounds the no-first-token / stalled-stream
         case that otherwise leaves an empty assistant placeholder forever.
         """
-        iterator = self.llm_service.stream_round(prepared, messages, tools).__aiter__()
+        iterator = self.llm_service.stream_round(
+            prepared, messages, tools, allow_tool_calls=allow_tool_calls
+        ).__aiter__()
         idle_timeout = (
             self.sandbox_idle_timeout_seconds
             if any(tool.get("type") == SANDBOX_TOOL_TYPE for tool in tools or [])
@@ -213,7 +220,7 @@ class ToolLoopService:
             if round_index > self.config.max_rounds + 1:
                 break
             result.rounds_used = round_index
-            tools = prepared.tools if tools_open else None
+            tools = prepared.tools
             pending_calls: List[ToolCallRequest] = []
             synthesized_ids: deque = deque()
             round_has_text = False
@@ -227,11 +234,13 @@ class ToolLoopService:
                 "[journey] mid=%s round %d start (tools=%s)",
                 turn_key,
                 round_index,
-                "on" if tools else "off",
+                "on" if tools and tools_open else "off",
             )
 
             try:
-                async for event in self._stream_round(prepared, messages, tools):
+                async for event in self._stream_round(
+                    prepared, messages, tools, allow_tool_calls=tools_open
+                ):
                     if event.kind is StreamEventKind.TEXT_DELTA:
                         if not event.text:
                             continue
@@ -396,6 +405,14 @@ class ToolLoopService:
             )
             if result.interrupted:
                 break
+            if pending_calls and not tools_open:
+                # The budget is spent; a call made anyway is not run.
+                logger.warning(
+                    "[journey] mid=%s ignored %d tool call(s) made after the cap",
+                    turn_key,
+                    len(pending_calls),
+                )
+                pending_calls = []
             if (
                 not pending_calls
                 and round_stop_reason == "pause_turn"
@@ -473,6 +490,7 @@ class ToolLoopService:
             )
             if round_index == self.config.max_rounds or budget_spent:
                 tools_open = False
+                messages.append(build_tool_budget_spent_turn())
                 logger.info(
                     "[journey] mid=%s tool cap hit (round %d, %d calls) — next "
                     "round forces a text answer",

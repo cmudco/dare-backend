@@ -142,6 +142,7 @@ class OpenAIService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None,
+        allow_tool_calls: bool = True,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from OpenAI's GPT model.
@@ -155,6 +156,8 @@ class OpenAIService:
             temperature: Controls randomness (0.0 to 1.0)
             images: List of image dicts for vision support
             tools: Optional tools list for web search
+            allow_tool_calls: False on a tool loop's forced final round; the
+                tools stay in the request but the model may not call them
 
         Yields:
             LLMStreamEvent
@@ -172,6 +175,7 @@ class OpenAIService:
                     max_tokens,
                     temperature,
                     tools,
+                    allow_tool_calls,
                 )
                 processor = OpenAIStreamProcessor.process_responses_api_stream
             else:
@@ -186,6 +190,7 @@ class OpenAIService:
                     temperature,
                     effort,
                     non_web_tools or None,
+                    allow_tool_calls,
                 )
                 processor = OpenAIStreamProcessor.process_chat_completion_stream
 
@@ -393,6 +398,7 @@ class OpenAIService:
         max_tokens: int,
         temperature: float,
         tools: Optional[List[Dict]] = None,
+        allow_tool_calls: bool = True,
     ):
         """
         Stream using the Responses API.
@@ -422,6 +428,8 @@ class OpenAIService:
         responses_tools = OpenAIMessageFormatter.format_tools_for_responses_api(tools)
         if responses_tools:
             params["tools"] = responses_tools
+            if not allow_tool_calls:
+                params["tool_choice"] = "none"
         if any(tool.get("type") == OPENAI_CODE_INTERPRETER for tool in tools):
             params["include"] = ["code_interpreter_call.outputs"]
 
@@ -456,6 +464,7 @@ class OpenAIService:
         temperature: float,
         effort: Optional[str],
         tools: Optional[List[Dict]] = None,
+        allow_tool_calls: bool = True,
     ):
         """
         Stream using Chat Completions API.
@@ -472,6 +481,8 @@ class OpenAIService:
         kwargs = self._build_chat_completion_params(
             messages, max_tokens, temperature, effort, tools
         )
+        if "tools" in kwargs and not allow_tool_calls:
+            kwargs["tool_choice"] = "none"
 
         return await self.client.chat.completions.create(**kwargs)
 

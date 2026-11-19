@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, patch
 from django.test import SimpleTestCase
 
 from conversations.services.tool_execution_service import (
-    ToolExecutionContext, ToolExecutionService)
+    ToolExecutionContext,
+    ToolExecutionService,
+)
 from conversations.services.tool_loop_service import ToolLoopService
 from core.services.dtos import LLMStreamEvent, ToolCallRequest, ToolCallResult
 from workflows.handlers.event_emitter import EventEmitter
@@ -42,7 +44,7 @@ class _TextOnlyLLMService:
             context_trace=None,
         )
 
-    async def stream_round(self, prepared, messages, tools):
+    async def stream_round(self, prepared, messages, tools, allow_tool_calls=True):
         for text in ("Hello", " world"):
             yield LLMStreamEvent.text_delta(text)
         yield LLMStreamEvent.usage_frame({"input_tokens": 5, "output_tokens": 2})
@@ -60,7 +62,7 @@ class _AgenticLLMService:
             context_trace=None,
         )
 
-    async def stream_round(self, prepared, messages, tools):
+    async def stream_round(self, prepared, messages, tools, allow_tool_calls=True):
         self.rounds += 1
         if self.rounds == 1:
             call = ToolCallRequest(

@@ -123,6 +123,7 @@ class CustomLLMService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None,
+        allow_tool_calls: bool = True,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from custom OpenAI-compatible endpoint.
@@ -144,7 +145,11 @@ class CustomLLMService:
 
             if search == GatewayWebSearch.RESPONSES:
                 response = await self._stream_responses(
-                    prepared_messages, max_tokens, temperature, tools
+                    prepared_messages,
+                    max_tokens,
+                    temperature,
+                    tools,
+                    allow_tool_calls,
                 )
                 processor = OpenAIStreamProcessor.process_responses_api_stream
             else:
@@ -155,6 +160,7 @@ class CustomLLMService:
                     effort,
                     function_tools,
                     web_search=search == GatewayWebSearch.CHAT_OPTIONS,
+                    allow_tool_calls=allow_tool_calls,
                 )
                 processor = OpenAIStreamProcessor.process_chat_completion_stream
 
@@ -334,6 +340,7 @@ class CustomLLMService:
         max_tokens: int,
         temperature: float,
         tools: List[Dict],
+        allow_tool_calls: bool = True,
     ):
         """Stream through /v1/responses, the only gateway surface where GPT searches."""
         params = {
@@ -346,6 +353,8 @@ class CustomLLMService:
         }
         if self.capabilities.supports_temperature:
             params["temperature"] = temperature
+        if not allow_tool_calls:
+            params["tool_choice"] = "none"
         return await self.client.responses.create(**params)
 
     async def _stream_chat_completions(
@@ -356,6 +365,7 @@ class CustomLLMService:
         effort: Optional[str],
         tools: Optional[List[Dict]] = None,
         web_search: bool = False,
+        allow_tool_calls: bool = True,
     ):
         """
         Stream using Chat Completions API.
@@ -377,6 +387,8 @@ class CustomLLMService:
         )
         if web_search:
             kwargs["web_search_options"] = {}
+        if "tools" in kwargs and not allow_tool_calls:
+            kwargs["tool_choice"] = "none"
 
         return await self.client.chat.completions.create(**kwargs)
 

@@ -15,12 +15,13 @@ from typing import Any, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 
-from conversations.constants import SenderType
+from conversations.constants import MAX_TOOL_ROUNDS, SenderType
 from conversations.models import Artifact, Conversation, Message
 
 from .db_helpers import convert_file_to_base64_dict
 from .tool_turn_helpers import (
     build_history_tool_turns,
+    build_tool_budget_spent_turn,
     has_stored_web_search_results,
     summarize_tool_usage,
 )
@@ -152,6 +153,10 @@ def get_conversation_history(
             result.extend(
                 build_history_tool_turns(msg.id, tool_calls, _web_quotes(msg))
             )
+            # Tools that ran in the last allowed round mean the turn was cut
+            # off there, and the model was told so before it answered.
+            if max(call.round_index for call in tool_calls) >= MAX_TOOL_ROUNDS:
+                result.append(build_tool_budget_spent_turn())
         elif tool_calls:
             suffix = summarize_tool_usage(tool_calls)
             content = f"{content}\n\n{suffix}" if content else suffix

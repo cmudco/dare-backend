@@ -137,7 +137,7 @@ DEFAULT_ANONYMOUS_USER_NAME = "Anonymous User"
 DEFAULT_CONVERSATION_TITLE = "New Chat"
 
 # Tool loop: maximum tool-execution rounds per turn. The call after the
-# final round runs with tools stripped, forcing a text answer.
+# final round may not call tools, forcing a text answer.
 MAX_TOOL_ROUNDS = 5
 
 # Default LLM configuration values

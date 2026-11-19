@@ -241,6 +241,7 @@ class LLMService:
         prepared: PreparedChat,
         messages: List[Dict],
         tools: Optional[List[Dict]],
+        allow_tool_calls: bool = True,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """Stream one model call of a tool loop as typed events.
 
@@ -248,7 +249,9 @@ class LLMService:
             prepared: The turn's PreparedChat.
             messages: Current message list (round 1 messages plus any
                 appended tool turns).
-            tools: Tools for this round — None on the forced final round.
+            tools: The turn's tools, the same on every round.
+            allow_tool_calls: False on the forced final round, which must
+                answer in text.
 
         Yields:
             LLMStreamEvent
@@ -260,6 +263,7 @@ class LLMService:
             effort=prepared.generation.effort,
             images=prepared.images,
             tools=tools,
+            allow_tool_calls=allow_tool_calls,
         ):
             yield event
 
