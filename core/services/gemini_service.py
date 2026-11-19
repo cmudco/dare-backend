@@ -104,6 +104,7 @@ class GeminiService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None,
+        allow_tool_calls: bool = True,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from Google Gemini API.
@@ -127,7 +128,12 @@ class GeminiService:
 
             # Step 2: Create streaming response
             response_stream = await self._create_stream(
-                prepared_messages, max_tokens, temperature, tools, effort
+                prepared_messages,
+                max_tokens,
+                temperature,
+                tools,
+                effort,
+                allow_tool_calls,
             )
 
             # Step 3: Process and yield stream events
@@ -296,6 +302,7 @@ class GeminiService:
         temperature: float,
         tools: Optional[List[Dict]],
         effort: Optional[str] = None,
+        allow_tool_calls: bool = True,
     ):
         """
         Create Gemini streaming response using native async interface.
@@ -319,6 +326,12 @@ class GeminiService:
         config = self._build_generation_config(
             max_tokens, temperature, tools, system_instruction, effort
         )
+        if config.tool_config and not allow_tool_calls:
+            # Without its tools declared Gemini still emits a call for the
+            # ones it used earlier in the turn; NONE keeps them and forbids it.
+            config.tool_config.function_calling_config = types.FunctionCallingConfig(
+                mode="NONE"
+            )
 
         # Use native async interface for true real-time streaming
         return await self.async_client.models.generate_content_stream(

@@ -96,7 +96,7 @@ class LlamaService:
             return f"Error: {str(e)}", {}
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, effort: Optional[str] = None, images: List[Dict] = None, tools: list = None
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, effort: Optional[str] = None, images: List[Dict] = None, tools: list = None, allow_tool_calls: bool = True
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Streams chat completions from LLaMA via Ollama.
