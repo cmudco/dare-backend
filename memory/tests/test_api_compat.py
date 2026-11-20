@@ -131,18 +131,18 @@ class CompatListTests(MemoryApiTestCase):
 
 
 class CompatForgetTests(MemoryApiTestCase):
-    def test_forgetting_a_record_soft_deletes_and_logs(self):
+    def test_forgetting_a_record_erases_it_and_logs_without_its_text(self):
         record = MemoryRecord.objects.create(
             user=self.user, kind="fact", key="location", text="Lives in Lahore."
         )
         response = self.client.delete(f"/api/memory/items/{record.id}/")
         self.assertEqual(response.status_code, 204)
 
-        record.refresh_from_db()
-        self.assertTrue(record.is_deleted)
+        self.assertFalse(MemoryRecord.objects.filter(pk=record.id).exists())
         entry = MemoryLedgerEntry.objects.get(user=self.user)
         self.assertEqual(entry.action, "forget")
         self.assertTrue(entry.applied)
+        self.assertNotIn("Lahore", entry.detail)
 
     def test_forgetting_a_doc_line_rewrites_the_document(self):
         UserMemoryDocument.objects.create(user=self.user, content=DOC)

@@ -7,16 +7,19 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from memory.services import api_service as memory_service
-from memory.services import backfill, portability
+from memory.services import backfill, omp_export, omp_import, portability
 
 from .serializers import (
     ClearResponseSerializer,
     MemoryBackfillRequestSerializer,
     MemoryBackfillResponseSerializer,
     MemoryBackfillRunSerializer,
+    MemoryImportRunSerializer,
     MemoryItemSerializer,
     MemorySearchRequestSerializer,
     MemorySearchResponseSerializer,
+    OmpExportQuerySerializer,
+    OmpReleaseResponseSerializer,
 )
 
 SERVICE_ERROR_STATUSES = {
@@ -159,6 +162,49 @@ class MemoryViewSet(viewsets.ViewSet):
 
     def export(self, request):
         return Response(portability.export_bundle(request.user))
+
+    @extend_schema(
+        summary="Export memory as an Open Memory Protocol archive",
+        parameters=[OmpExportQuerySerializer],
+    )
+    def omp_export(self, request):
+        query = OmpExportQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        return Response(
+            omp_export.export_archive(
+                request.user,
+                include_sensitive=query.validated_data["include_sensitive"],
+            )
+        )
+
+    @extend_schema(summary="One memory as its Open Memory Protocol record")
+    def omp_record(self, request, record_id):
+        payload = omp_export.export_record(request.user, str(record_id))
+        if payload is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(payload)
+
+    @extend_schema(
+        summary="Import an Open Memory Protocol archive",
+        responses={201: MemoryImportRunSerializer},
+    )
+    def omp_import(self, request):
+        try:
+            run = omp_import.import_archive(request.user, request.data)
+        except omp_import.OmpImportError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            MemoryImportRunSerializer(run).data, status=status.HTTP_201_CREATED
+        )
+
+    @extend_schema(
+        summary="Release every imported memory that is still held",
+        request=None,
+        responses={200: OmpReleaseResponseSerializer},
+    )
+    def omp_release(self, request):
+        payload = omp_import.release_imports(request.user)
+        return Response(OmpReleaseResponseSerializer(payload).data)
 
     def import_bundle(self, request):
         try:

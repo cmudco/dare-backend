@@ -140,10 +140,10 @@ def record_item(record: MemoryRecord, score: Optional[float] = None) -> Dict[str
     else:
         memory_type = KNOWLEDGE
         categories = [part for part in record.key.split(":") if part] or [record.kind]
-        if record.state == MemoryState.HELD:
-            # Visible in the UI, never retrieved — the tag is how the page can
-            # say so without a dedicated field in the round-1 contract.
-            categories.append("held")
+    if record.state == MemoryState.HELD and not record.pinned_to:
+        # Visible in the UI, never retrieved — the tag is how the page can
+        # say so without a dedicated field in the round-1 contract.
+        categories.append("held")
 
     if record.state == MemoryState.SUPERSEDED:
         categories.append("no-longer-current")
