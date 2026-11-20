@@ -37,14 +37,8 @@ from core.services.vision_model_service import (
     resolve_vision_model,
     select_vision_model,
 )
-from core.storage.backends import SyftBoxStorage
 from core.storage.constants import StorageBackendChoice
-from core.storage.permission_service import SyftBoxPermissionService
 from feature_flags.permissions import IsOcrEnabled, IsRagEnabled
-from syftbox.services.syftbox_file_service import SyftBoxFileService
-from syftbox.services.syftbox_permission_service import (
-    SyftBoxPermissionService as SyftBoxApiPermissionService,
-)
 
 from ..constants import ALLOWED_FILES, FileStatus
 from ..models import DocumentChunk, File, FileShare, Folder, Tag
@@ -95,6 +89,15 @@ from .serializers import (
     VisionModelCandidateSerializer,
     VisionModelSelectionSerializer,
 )
+
+# Only reached for SyftBox-backed files, which cannot exist without the package.
+if settings.SYFTBOX_INSTALLED:
+    from core.storage.backends import SyftBoxStorage
+    from core.storage.permission_service import SyftBoxPermissionService
+    from syftbox.services.syftbox_file_service import SyftBoxFileService
+    from syftbox.services.syftbox_permission_service import (
+        SyftBoxPermissionService as SyftBoxApiPermissionService,
+    )
 
 logger = logging.getLogger(__name__)
 User = get_user_model()

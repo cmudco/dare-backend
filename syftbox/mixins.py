@@ -1,9 +1,14 @@
 """
-Re-export shim: this code now lives in the shared ``syftbox-connect``
-package. Kept so existing imports in this project keep resolving; the
-implementation is in ``syftbox_connect.mixins``.
+SyftBox OAuth token helpers. With the optional ``syftbox-connect`` package
+installed the mixin is re-exported from ``syftbox_connect.mixins``; without it
+an empty mixin keeps the models and their migrations loading.
 """
 
-from syftbox_connect.mixins import (  # noqa: F401
-    SyftBoxTokenMixin,
-)
+try:
+    from syftbox_connect.mixins import (  # noqa: F401
+        SyftBoxTokenMixin,
+    )
+except ModuleNotFoundError:
+
+    class SyftBoxTokenMixin:
+        pass

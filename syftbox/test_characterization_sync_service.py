@@ -10,6 +10,14 @@ Persistence is stubbed deliberately. What matters here is the routing, not what
 _create_ref_and_enqueue does once it is called; that stays in DARE either way.
 """
 
+from unittest import SkipTest
+
+from django.conf import settings
+
+if not settings.SYFTBOX_INSTALLED:
+    raise SkipTest("syftbox-connect is not installed")
+
+
 from unittest import mock
 
 from django.test import SimpleTestCase

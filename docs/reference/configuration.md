@@ -353,6 +353,11 @@ OIDC_ROLE_MAP={"city-admins":"SUPERADMIN","city-supervisors":"SUPERVISOR"}
 
 [SyftBox](https://syftbox.net) integration for federated data sharing.
 
+SyftBox is optional. It needs the private `syftbox-connect` package, which is not part of
+`requirements/prod.txt` or `local.txt`. With access to it, install it on top:
+`pip install -r requirements/prod.txt -r requirements/syftbox.txt`. Without it, DARE stores files
+locally, the `syftbox/` API is not mounted, and the variables below have no effect.
+
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SYFTBOX_ENABLED` | `False` | Enable SyftBox sync. |

@@ -45,8 +45,12 @@ app_paths = [
     path("", include("assistant.urls", namespace="assistant")),
     path("", include("release_notes.urls", namespace="release_notes")),
     path("", include("core.urls", namespace="core")),
-    path("syftbox/", include("syftbox.urls", namespace="syftbox")),
 ]
+
+if settings.SYFTBOX_INSTALLED:
+    app_paths.append(
+        path("syftbox/", include("syftbox.urls", namespace="syftbox"))
+    )
 
 api_docs_paths = [
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

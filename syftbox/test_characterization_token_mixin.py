@@ -10,6 +10,14 @@ Uses the real User model rather than a stub, since the encrypted field types
 and the `save(update_fields=...)` call are part of what is being pinned.
 """
 
+from unittest import SkipTest
+
+from django.conf import settings
+
+if not settings.SYFTBOX_INSTALLED:
+    raise SkipTest("syftbox-connect is not installed")
+
+
 import time
 from unittest import mock
 

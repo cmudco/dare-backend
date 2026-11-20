@@ -1,0 +1,8 @@
+# Optional SyftBox integration (distributed file storage). Install on top of
+# prod.txt or local.txt; DARE runs on local file storage without it.
+syft-core
+syft-perm
+
+# Private repo — pip needs SSH access to cmudco. Pinned to a tag so a change
+# there cannot reach a project that never deployed.
+syftbox-connect[api] @ git+ssh://git@github.com/cmudco/syftbox-connect.git@v0.1.2
