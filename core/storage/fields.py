@@ -12,6 +12,11 @@ try:
     )
 except ModuleNotFoundError:
     from django.db.models import FileField
+    from django.db.models.fields.files import FieldFile
+
+    class DynamicStorageFieldFile(FieldFile):
+        def exists(self):
+            return bool(self.name) and self.storage.exists(self.name)
 
     class DynamicStorageFileField(FileField):
-        pass
+        attr_class = DynamicStorageFieldFile
