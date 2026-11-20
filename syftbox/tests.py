@@ -1,3 +1,10 @@
+from unittest import SkipTest
+
+from django.conf import settings
+
+if not settings.SYFTBOX_INSTALLED:
+    raise SkipTest("syftbox-connect is not installed")
+
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 

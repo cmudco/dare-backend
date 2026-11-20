@@ -15,6 +15,7 @@ Dropping the columns is a separate, later migration, once the new table has
 been serving reads in production for a release.
 """
 
+from django.conf import settings
 from django.db import migrations
 
 # A datasite is addressed by email, so that is the key. These models hold that
@@ -96,7 +97,11 @@ class Migration(migrations.Migration):
     dependencies = [
         ("users", "0037_accesscodegroup_provisioned_by"),
         ("core", "0001_initial"),
-        ("syftbox_connect", "0001_initial"),
     ]
+    operations = []
 
-    operations = [migrations.RunPython(forwards, backwards)]
+    # Without the optional syftbox-connect package there is no SyftBoxAccount
+    # table to fill, so this migration applies as a no-op.
+    if settings.SYFTBOX_INSTALLED:
+        dependencies.append(("syftbox_connect", "0001_initial"))
+        operations.append(migrations.RunPython(forwards, backwards))

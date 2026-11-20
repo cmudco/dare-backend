@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import os
 from datetime import timedelta
+from importlib.util import find_spec
 
 from config import env
 from config.email import EMAIL_BACKENDS, resolve_email_provider
@@ -97,9 +98,13 @@ THIRD_PARTY_APPS = [
     "channels",
     "django_rq",
     "drf_spectacular",
-    "syftbox_connect",
     "rest_framework_simplejwt.token_blacklist",
 ]
+
+# syftbox-connect is an optional private package (requirements/syftbox.txt).
+SYFTBOX_INSTALLED = find_spec("syftbox_connect") is not None
+if SYFTBOX_INSTALLED:
+    THIRD_PARTY_APPS.append("syftbox_connect")
 
 INSTALLED_APPS = DJANGO_APPS + LOCAL_APPS + THIRD_PARTY_APPS
 

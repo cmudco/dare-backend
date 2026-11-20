@@ -11,6 +11,14 @@ identity assertion below fails immediately rather than at runtime in
 production.
 """
 
+from unittest import SkipTest
+
+from django.conf import settings
+
+if not settings.SYFTBOX_INSTALLED:
+    raise SkipTest("syftbox-connect is not installed")
+
+
 from django.test import SimpleTestCase
 
 # Names re-exported by each shim, paired with the package module behind it.
