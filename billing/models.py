@@ -1099,13 +1099,20 @@ class UserWalletPreference(TimeStampMixin):
 
     @classmethod
     def get_or_create_for(cls, user):
-        pref, _created = cls.objects.get_or_create(
-            user=user,
-            defaults={
-                "active_wallet_type": UserWalletPreferenceTypeChoice.DARE,
-                "active_wallet_ref_id": None,
-            },
-        )
+        try:
+            pref, _created = cls.objects.get_or_create(
+                user=user,
+                defaults={
+                    "active_wallet_type": UserWalletPreferenceTypeChoice.DARE,
+                    "active_wallet_ref_id": None,
+                },
+            )
+        except ValidationError:
+            # full_clean() in save() turns a concurrent first insert into a unique
+            # ValidationError, which get_or_create's IntegrityError retry misses.
+            pref = cls.objects.filter(user=user).first()
+            if pref is None:
+                raise
         return pref
 
     def reset_to_dare(self, save: bool = True):
