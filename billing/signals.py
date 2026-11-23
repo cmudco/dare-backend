@@ -32,12 +32,13 @@ _BRIDGE_GUARD = set()
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user_wallet(sender, instance, created, **kwargs):
     """
-    Create a wallet when a new user is registered.
+    Create a wallet and a DARE wallet preference when a new user is registered.
     Default starting balance is $0.00; initial credit is applied explicitly
     during registration (either via Access Code Group setting or $5 default).
     """
     if created:
         Wallet.objects.create(user=instance, balance=Decimal("0.00"))
+        UserWalletPreference.objects.create(user=instance)
 
 
 def _legacy_to_preference(billing_mode: str) -> str:
@@ -59,7 +60,9 @@ def _preference_to_legacy(active_wallet_type: str) -> str:
 
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
-def mirror_billing_mode_to_preference(sender, instance, created, **kwargs):
+def mirror_billing_mode_to_preference(
+    sender, instance, created, update_fields=None, **kwargs
+):
     """
     When User.billing_mode is set via the existing /billing-mode/ endpoint or
     Django admin, mirror the choice into UserWalletPreference so the new
@@ -71,7 +74,8 @@ def mirror_billing_mode_to_preference(sender, instance, created, **kwargs):
     the BYO mirror would fail full_clean(), so we fall back to DARE silently.
     """
     if created:
-        # Lazy creation handled by get_or_create_for on first read; nothing to mirror.
+        return
+    if update_fields is not None and "billing_mode" not in update_fields:
         return
 
     key = ("user", instance.pk)

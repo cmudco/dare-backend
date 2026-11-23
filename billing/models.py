@@ -961,10 +961,10 @@ class MemberLimitAlert(TimeStampMixin):
 
 class UserWalletPreference(TimeStampMixin):
     """
-    Per-user pointer to the active wallet for routing LLM calls. Created lazily
-    on first read with default DARE so existing users keep the current behaviour
-    with no data migration. The router (`billing.wallet_router`) consults this
-    on every call; admin-side changes self-heal here on the next request.
+    Per-user pointer to the active wallet for routing LLM calls. Created with
+    default DARE when the user is created. The router (`billing.wallet_router`)
+    consults this on every call; admin-side changes self-heal here on the next
+    request.
     """
 
     user = models.OneToOneField(
@@ -1094,25 +1094,20 @@ class UserWalletPreference(TimeStampMixin):
                 )
 
     def save(self, *args, **kwargs):
-        self.full_clean()
+        # The one-per-user rule is left to the database so a concurrent insert
+        # raises IntegrityError, which get_or_create retries as a lookup.
+        self.full_clean(validate_unique=False)
         super().save(*args, **kwargs)
 
     @classmethod
     def get_or_create_for(cls, user):
-        try:
-            pref, _created = cls.objects.get_or_create(
-                user=user,
-                defaults={
-                    "active_wallet_type": UserWalletPreferenceTypeChoice.DARE,
-                    "active_wallet_ref_id": None,
-                },
-            )
-        except ValidationError:
-            # full_clean() in save() turns a concurrent first insert into a unique
-            # ValidationError, which get_or_create's IntegrityError retry misses.
-            pref = cls.objects.filter(user=user).first()
-            if pref is None:
-                raise
+        pref, _created = cls.objects.get_or_create(
+            user=user,
+            defaults={
+                "active_wallet_type": UserWalletPreferenceTypeChoice.DARE,
+                "active_wallet_ref_id": None,
+            },
+        )
         return pref
 
     def reset_to_dare(self, save: bool = True):
