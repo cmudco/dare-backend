@@ -11,6 +11,7 @@ from core.services.dtos.parsed_document_dto import (
     ParsedDocument,
     ParsedElement,
 )
+from files.models import File
 
 
 class DocumentParsingServiceTests(SimpleTestCase):
@@ -31,7 +32,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
         read_legacy.return_value = "Flat recovery text"
         get_parsers.return_value = [BasicDocumentParser()]
         service = DocumentParsingService()
-        file = SimpleNamespace(processing_mode="advanced", id=62, save=Mock())
+        file = File(processing_mode="advanced", id=62)
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),
@@ -59,7 +60,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
         failure = RuntimeError("layout model unavailable")
         docling.parse.side_effect = failure
         service = DocumentParsingService(parsers=[docling, BasicDocumentParser()])
-        file = SimpleNamespace(processing_mode="advanced", id=61, save=Mock())
+        file = File(processing_mode="advanced", id=61)
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),
@@ -110,7 +111,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
         self.assertEqual(parsed.parser, "docling")
         read_native.assert_called_once_with(b"pdf", "example.pdf")
 
-        persisted = SimpleNamespace(processing_mode="advanced", id=56, save=Mock())
+        persisted = File(processing_mode="advanced", id=56)
         service.persist(persisted, parsed)
         self.assertIn(complete, persisted.extracted_text)
 
@@ -131,7 +132,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
             parser="docling",
         )
         service = DocumentParsingService(parsers=[parser])
-        file = SimpleNamespace(processing_mode="advanced", id=57, save=Mock())
+        file = File(processing_mode="advanced", id=57)
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),
@@ -202,7 +203,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
             parser="docling",
         )
         service = DocumentParsingService(parsers=[parser])
-        file = SimpleNamespace(processing_mode="advanced", id=59, save=Mock())
+        file = File(processing_mode="advanced", id=59)
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),
@@ -241,7 +242,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
             parser="docling",
         )
         service = DocumentParsingService(parsers=[parser])
-        file = SimpleNamespace(processing_mode="advanced", id=60, save=Mock())
+        file = File(processing_mode="advanced", id=60)
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),

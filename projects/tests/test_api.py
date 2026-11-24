@@ -35,13 +35,10 @@ class ProjectTestCase(TestCase):
         self.client.force_authenticate(self.user)
 
     def make_file(self, user, name, *, is_media=False, text=None):
-        return File.active_objects.create(
-            user=user,
-            file=f"files/{name}",
-            name=name,
-            is_media=is_media,
-            extracted_text=text,
-        )
+        file = File(user=user, file=f"files/{name}", name=name, is_media=is_media)
+        file.set_extracted_text(text)
+        file.save()
+        return file
 
     def make_project(self, user=None, **fields):
         return PersonalProject.active_objects.create(
@@ -504,7 +501,7 @@ class ProjectMemoryScopeTests(ProjectTestCase):
         self.assertEqual(memory_scope_project_id(self.project.id), self.project.id)
 
 
-TOO_LARGE_TEXT = "x" * (DEFAULT_FULL_FILES_TOKEN_BUDGET * 4 + 4)
+TOO_LARGE_TEXT = " word" * (DEFAULT_FULL_FILES_TOKEN_BUDGET + 1)
 
 
 class ProjectSourceModeTests(ProjectTestCase):
@@ -599,7 +596,10 @@ class ProjectSourceModeTests(ProjectTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["file_count"], 2)
-        self.assertEqual(response.data["estimated_tokens"], 200)
+        self.assertEqual(
+            response.data["estimated_tokens"],
+            shared.token_count + only_folder.token_count,
+        )
         self.assertEqual(response.data["token_limit"], DEFAULT_FULL_FILES_TOKEN_BUDGET)
         self.assertTrue(response.data["fits_full_files"])
 
