@@ -9,12 +9,7 @@ import logging
 from datetime import datetime
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
-from conversations.constants import Provider
 from conversations.services.audio_transcription_service import AudioTranscriptionService
-from core.services.api_key_service import (
-    get_dispatch_credentials_for_user,
-    get_provider_api_key,
-)
 from core.services.whisper_service import WhisperService
 
 from .context_helpers import (
@@ -27,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 async def add_video_transcriptions_to_messages(
-    media_items: List[Dict], messages: List[Dict], user=None
+    media_items: List[Dict], messages: List[Dict]
 ) -> List[Dict]:
     """
     Add video transcriptions to message context for LLMs.
@@ -38,7 +33,6 @@ async def add_video_transcriptions_to_messages(
     Args:
         media_items: List of media dicts with 'preview', 'type', 'name'
         messages: List of message dictionaries
-        user: Optional user for API key resolution
 
     Returns:
         Updated messages list with video transcriptions added
@@ -49,8 +43,7 @@ async def add_video_transcriptions_to_messages(
         return messages
 
     try:
-        api_key = await _get_openai_api_key(user)
-        whisper_service = WhisperService(api_key=api_key)
+        whisper_service = await WhisperService.for_platform()
 
         transcriptions = await whisper_service.transcribe_multiple_videos(videos)
 
@@ -65,20 +58,6 @@ async def add_video_transcriptions_to_messages(
         # Don't fail the entire request if transcription fails
 
     return messages
-
-
-async def _get_openai_api_key(user=None) -> str:
-    """Get OpenAI API key for transcription. Whisper has no LiteLLM-proxied
-    equivalent today, so even when the user's wallet is LITELLM we route
-    transcription through the system OpenAI key (whisper-1 only); the picker
-    forces ``is_audio_transcriber=False`` on synthetic entries to keep
-    LITELLM users from selecting transcription models in the first place.
-    """
-    if user:
-        creds = await get_dispatch_credentials_for_user(Provider.OPENAI.value, user)
-        if creds.api_key:
-            return creds.api_key
-    return await get_provider_api_key(Provider.OPENAI.value)
 
 
 async def execute_audio_transcription(

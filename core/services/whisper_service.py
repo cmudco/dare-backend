@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 
 from config import env
 from conversations.constants import Provider
-from core.services.api_key_service import get_provider_api_key_sync
+from core.services.api_key_service import get_provider_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +23,32 @@ logger = logging.getLogger(__name__)
 class WhisperService:
     """Service for transcribing audio from videos using OpenAI Whisper."""
 
-    def __init__(self, api_key: Optional[str] = None):
-        """
-        Initialize Whisper service.
+    def __init__(self, api_key: str):
+        self.client = AsyncOpenAI(api_key=api_key, base_url=env.TRANSCRIPTION_BASE_URL)
 
-        Args:
-            api_key: Optional OpenAI API key. If not provided, uses system key
-        """
-        if api_key is None:
-            api_key = get_provider_api_key_sync(Provider.OPENAI.value)
+    @classmethod
+    async def for_platform(cls) -> "WhisperService":
+        """The deployment's transcription endpoint (OpenAI unless configured)."""
+        api_key = env.TRANSCRIPTION_API_KEY
+        return cls(api_key or await get_provider_api_key(Provider.OPENAI.value))
 
-        self.client = AsyncOpenAI(api_key=api_key)
+    async def transcribe(
+        self,
+        file,
+        model: Optional[str] = None,
+        language: Optional[str] = None,
+        response_format: str = "text",
+        **options,
+    ):
+        params = {
+            "model": model or env.TRANSCRIPTION_MODEL,
+            "file": file,
+            "response_format": response_format,
+            **options,
+        }
+        if language:
+            params["language"] = language
+        return await self.client.audio.transcriptions.create(**params)
 
     async def transcribe_video(self, video_data: Dict, language: Optional[str] = None) -> Optional[str]:
         """
@@ -71,16 +86,7 @@ class WhisperService:
             try:
                 # Call Whisper API
                 with open(audio_file_path, 'rb') as audio_file:
-                    transcript_params = {
-                        "model": "whisper-1",
-                        "file": audio_file,
-                        "response_format": "text"
-                    }
-
-                    if language:
-                        transcript_params["language"] = language
-
-                    transcript = await self.client.audio.transcriptions.create(**transcript_params)
+                    transcript = await self.transcribe(audio_file, language=language)
 
                 logger.info(f"Successfully transcribed video audio")
                 return transcript

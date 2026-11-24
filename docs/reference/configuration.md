@@ -124,6 +124,21 @@ needs a fresh container and a re-embed:
 
 Until a document is re-embedded, retrieval cannot find it.
 
+## Audio transcription
+
+Voice input, audio and video transcription, and video attachments in chat all transcribe
+through one OpenAI-compatible `/v1/audio/transcriptions` endpoint. Unset, DARE uses OpenAI
+exactly as before.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `TRANSCRIPTION_BASE_URL` | *(OpenAI)* | Base URL of the transcription server or gateway, e.g. `https://gateway.example.org/v1`. |
+| `TRANSCRIPTION_API_KEY` | the OpenAI key | Key sent to that server. Unset, DARE uses the OpenAI key from Django admin or `OPENAI_API_KEY`. |
+| `TRANSCRIPTION_MODEL` | `whisper-1` | Model for voice input and video attachments. A transcription model picked in chat is sent by its own name. |
+
+Behind a gateway, every transcription model in DARE's catalog (for example
+`gpt-4o-transcribe-diarize`) must exist on the gateway under the same name.
+
 ## Vector stores
 
 You can configure Pinecone (managed), Weaviate (self-hosted) or both; users choose in their
