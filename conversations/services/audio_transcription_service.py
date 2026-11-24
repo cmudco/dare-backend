@@ -14,8 +14,6 @@ from typing import Dict, Optional, List, AsyncGenerator, Callable, Awaitable
 from datetime import datetime
 from files.models import File
 from core.services.whisper_service import WhisperService
-from core.services.api_key_service import get_provider_api_key
-from conversations.constants import Provider
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +45,7 @@ class AudioTranscriptionService:
         audio_bytes: bytes,
         audio_format: str = 'wav',
         language: Optional[str] = None,
-        model: str = 'whisper-1'
+        model: Optional[str] = None
     ) -> str:
         """
         Transcribe raw audio bytes using Whisper API.
@@ -63,8 +61,7 @@ class AudioTranscriptionService:
         """
         logger.info(f"Transcribing audio: {len(audio_bytes)} bytes, format={audio_format}")
         
-        api_key = await get_provider_api_key(Provider.OPENAI.value)
-        whisper_service = WhisperService(api_key=api_key)
+        whisper_service = await WhisperService.for_platform()
         
         suffix = f'.{audio_format}' if audio_format else '.wav'
         temp_file_path = None
@@ -83,7 +80,7 @@ class AudioTranscriptionService:
                 if language:
                     transcript_params["language"] = language
                 
-                result = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                result = await whisper_service.transcribe(**transcript_params)
                 text = result if isinstance(result, str) else str(result)
             
             logger.info(f"Transcribed: {len(text)} characters")
@@ -204,8 +201,8 @@ class AudioTranscriptionService:
     @staticmethod
     async def transcribe_audio_file(
         file_obj: File,
-        language: Optional[str] = None,
-        model: str = "whisper-1"
+        model: str,
+        language: Optional[str] = None
     ) -> Optional[Dict]:
         """
         Transcribe an audio file using Whisper API.
@@ -213,7 +210,7 @@ class AudioTranscriptionService:
         Args:
             file_obj: File object containing the audio file
             language: Optional language code (e.g., 'en', 'es', 'fr')
-            model: Transcription model to use (default: 'whisper-1')
+            model: Transcription model to use
 
         Returns:
             Dictionary containing transcription result with:
@@ -227,11 +224,7 @@ class AudioTranscriptionService:
         try:
             logger.info(f"Starting transcription for file ID: {file_obj.id} ({file_obj.name}, type: {file_obj.media_type})")
 
-            # Get API key asynchronously (we're in async context)
-            api_key = await get_provider_api_key(Provider.OPENAI.value)
-
-            # Use WhisperService to transcribe
-            whisper_service = WhisperService(api_key=api_key)
+            whisper_service = await WhisperService.for_platform()
 
             # Handle video files differently (need to extract audio first)
             if file_obj.media_type == 'video':
@@ -295,7 +288,7 @@ class AudioTranscriptionService:
                             if language:
                                 transcript_params["language"] = language
 
-                            result = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                            result = await whisper_service.transcribe(**transcript_params)
                             
                             # Parse diarized response if using diarize model
                             if model == DIARIZE_MODEL and response_format == "diarized_json":
@@ -348,8 +341,8 @@ class AudioTranscriptionService:
     @staticmethod
     async def transcribe_audio_file_streaming(
         file_obj: File,
-        language: Optional[str] = None,
-        model: str = "whisper-1"
+        model: str,
+        language: Optional[str] = None
     ) -> AsyncGenerator[Dict, None]:
         """
         Transcribe an audio file using Whisper API, yielding each chunk as it completes.
@@ -360,7 +353,7 @@ class AudioTranscriptionService:
         Args:
             file_obj: File object containing the audio file
             language: Optional language code (e.g., 'en', 'es', 'fr')
-            model: Transcription model to use (default: 'whisper-1')
+            model: Transcription model to use
 
         Yields:
             Dictionary with chunk data:
@@ -371,8 +364,7 @@ class AudioTranscriptionService:
         try:
             logger.info(f"Starting streaming transcription for file ID: {file_obj.id} ({file_obj.name})")
 
-            api_key = await get_provider_api_key(Provider.OPENAI.value)
-            whisper_service = WhisperService(api_key=api_key)
+            whisper_service = await WhisperService.for_platform()
 
             transcription_text = ""
 
@@ -444,7 +436,7 @@ class AudioTranscriptionService:
                             if language:
                                 transcript_params["language"] = language
 
-                            result = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                            result = await whisper_service.transcribe(**transcript_params)
                             
                             # Parse diarized response if using diarize model
                             if model == DIARIZE_MODEL and response_format == "diarized_json":
@@ -502,34 +494,6 @@ class AudioTranscriptionService:
                 "file_name": file_obj.name,
             }
             return
-
-    @staticmethod
-    async def transcribe_multiple_audio_files(
-        file_objects: List[File],
-        language: Optional[str] = None,
-        model: str = "whisper-1"
-    ) -> List[Dict]:
-        """
-        Transcribe multiple audio files.
-
-        Args:
-            file_objects: List of File objects to transcribe
-            language: Optional language code
-            model: Transcription model to use
-
-        Returns:
-            List of transcription result dictionaries
-        """
-        results = []
-        for file_obj in file_objects:
-            result = await AudioTranscriptionService.transcribe_audio_file(
-                file_obj=file_obj,
-                language=language,
-                model=model
-            )
-            if result:
-                results.append(result)
-        return results
 
     @staticmethod
     def _format_diarized_response(response) -> str:

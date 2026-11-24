@@ -90,6 +90,11 @@ EMBEDDING_MODEL = env("EMBEDDING_MODEL", default="text-embedding-3-large")
 EMBEDDING_DIMENSIONS = env.int("EMBEDDING_DIMENSIONS", default=3072)
 MEMORY_EMBEDDING_MODEL = env("MEMORY_EMBEDDING_MODEL", default="text-embedding-3-small")
 
+# Audio transcription: any OpenAI-compatible /v1/audio/transcriptions endpoint.
+TRANSCRIPTION_BASE_URL = env("TRANSCRIPTION_BASE_URL", default="") or None
+TRANSCRIPTION_API_KEY = env("TRANSCRIPTION_API_KEY", default="")
+TRANSCRIPTION_MODEL = env("TRANSCRIPTION_MODEL", default="whisper-1")
+
 # Docling enrichment; the model resolves from DARE's LLM catalog so billing stays consistent.
 DOCUMENT_ENRICHMENT_ENABLED = env.bool("DOCUMENT_ENRICHMENT_ENABLED", default=True)
 DOCUMENT_ENRICHMENT_MODEL = env(

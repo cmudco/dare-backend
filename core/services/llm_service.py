@@ -197,9 +197,7 @@ class LLMService:
         all_images = await self._process_media_files(request)
 
         if all_images:
-            messages = await self.add_video_transcriptions_to_context(
-                all_images, messages, request.user
-            )
+            messages = await add_video_transcriptions_to_messages(all_images, messages)
         media_ms = int((time.monotonic() - media_start) * 1000)
 
         tools_start = time.monotonic()
@@ -475,9 +473,7 @@ class LLMService:
             Tuple of (chunk: str, usage: Dict)
         """
         if all_images:
-            messages = await self.add_video_transcriptions_to_context(
-                all_images, messages, request.user
-            )
+            messages = await add_video_transcriptions_to_messages(all_images, messages)
 
         ai_service = await self._get_ai_service(
             llm,
@@ -551,12 +547,6 @@ class LLMService:
             yield "", {"tool_calls": ready_tool_calls}
 
     # ========== End Query Orchestration Methods ==========
-
-    async def add_video_transcriptions_to_context(
-        self, media_items: List[Dict], messages: List[Dict], user=None
-    ) -> List[Dict]:
-        """Add video transcriptions to message context for LLMs."""
-        return await add_video_transcriptions_to_messages(media_items, messages, user)
 
     async def _get_ai_service(
         self,
