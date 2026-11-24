@@ -15,6 +15,7 @@ from conversations.services.message_helpers.regeneration_helpers import (
 from core.services.dtos import LLMQueryRequest, MediaConfig
 from core.services.file_upload_service import FileUploadService
 from core.services.llm_helpers.history_helpers import get_conversation_history
+from core.services.llm_utils.message_formatters import OpenAIMessageFormatter
 from core.services.llm_utils.provider_message_converters import ClaudeMessageConverter
 from core.services.llm_utils.vision_handlers import (
     ClaudeVisionHandler,
@@ -82,6 +83,22 @@ class ImageOnlyProviderTests(SimpleTestCase):
         )
         self.assertEqual(messages[0]["content"][0]["type"], "image")
         self.assertEqual(messages[0]["content"][0]["source"]["data"], PNG)
+
+    def test_responses_api_image_turn_is_role_message_items(self):
+        messages = OpenAIVisionHandler.add_images_to_messages(
+            [
+                {"role": "system", "content": "Be brief."},
+                {"role": "user", "content": "What is this?"},
+            ],
+            [IMAGE],
+        )
+        items = OpenAIMessageFormatter.format_for_responses_api(messages)
+
+        self.assertEqual([item["role"] for item in items], ["system", "user"])
+        self.assertEqual(
+            {part["type"] for part in items[1]["content"]},
+            {"input_text", "input_image"},
+        )
 
 
 class PersistedImageChatTests(TransactionTestCase):
