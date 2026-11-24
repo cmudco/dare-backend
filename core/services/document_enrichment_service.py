@@ -1117,8 +1117,14 @@ class DocumentEnrichmentService:
 
     @staticmethod
     def _persist(file: File, text: str, payload: Dict[str, Any]) -> None:
-        file.extracted_text = sanitize_document_text(text)
+        file.set_extracted_text(sanitize_document_text(text))
         file.document_model = sanitize_document_payload(payload)
         persist_ingestion_file(
-            file, update_fields=["extracted_text", "document_model", "updated_at"]
+            file,
+            update_fields=[
+                "extracted_text",
+                "token_count",
+                "document_model",
+                "updated_at",
+            ],
         )
