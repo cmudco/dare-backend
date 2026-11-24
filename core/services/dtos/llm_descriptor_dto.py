@@ -66,6 +66,7 @@ class LLMDescriptor:
     supports_effort: bool = False
     supports_adaptive_thinking: bool = False
     default_effort: str = "high"
+    max_effort: str = "max"
     default_adaptive_thinking_enabled: bool = False
     is_image_generator: bool = False
     is_audio_transcriber: bool = False
@@ -87,6 +88,7 @@ class LLMDescriptor:
                 getattr(llm, "supports_adaptive_thinking", False)
             ),
             default_effort=getattr(llm, "default_effort", "high"),
+            max_effort=getattr(llm, "max_effort", "max"),
             default_adaptive_thinking_enabled=bool(
                 getattr(llm, "default_adaptive_thinking_enabled", False)
             ),
@@ -187,6 +189,7 @@ class LLMDescriptor:
             supports_effort=self.supports_effort,
             supports_adaptive_thinking=self.supports_adaptive_thinking,
             default_effort=self.default_effort,
+            max_effort=self.max_effort,
             default_adaptive_thinking_enabled=self.default_adaptive_thinking_enabled,
             is_image_generator=self.is_image_generator,
             is_audio_transcriber=self.is_audio_transcriber,

@@ -60,6 +60,7 @@ MODEL_STAND_INS = {
     "gemini-4-argon": "gemini-3.1-pro-preview",
     "gemini-4-carbon": "gemini-3.1-pro-preview",
     "gemini-4-hydrogen": "gemini-3.5-flash",
+    "gemini-4-neon": "gemini-3.1-pro-preview",
 }
 
 # Proxy identifiers wrap the vendor name: "gemini/gemini-3.6-flash",

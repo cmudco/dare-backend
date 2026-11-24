@@ -111,6 +111,7 @@ def _llm_entry(model: LLM) -> Dict[str, Any]:
         "supports_adaptive_thinking": model.supports_adaptive_thinking,
         "reasoning_level": model.reasoning_level,
         "default_effort": model.default_effort,
+        "max_effort": model.max_effort,
         "default_adaptive_thinking_enabled": model.default_adaptive_thinking_enabled,
         "is_image_generator": model.is_image_generator,
         "is_audio_transcriber": model.is_audio_transcriber,
@@ -148,6 +149,7 @@ def _litellm_entry(litellm_key, model_name: str) -> Dict[str, Any]:
             family and family.supports_adaptive_thinking
         ),
         "default_effort": "high",
+        "max_effort": "max",
         "default_adaptive_thinking_enabled": False,
         "is_image_generator": False,
         "is_audio_transcriber": False,

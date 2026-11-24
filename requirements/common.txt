@@ -70,7 +70,7 @@ tiktoken~=0.8.0
 anthropic~=0.75.0
 
 # Google Gemini (new unified SDK)
-google-genai~=1.75.0
+google-genai~=3.6.1
 
 # LLaMA (via Ollama)
 # ollama~=0.4.2 - upgrading it below to avoid conflict with httpx
