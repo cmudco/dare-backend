@@ -188,6 +188,7 @@ A feature is ready only when:
 
 - the request-to-response flow has one clear owner at every step;
 - no unused config, migration, queue, flag, endpoint, or compatibility branch was introduced;
+- a bug fix removes its root cause: when a small refactor makes the bad state impossible, it replaces the guard, catch, retry, or special case;
 - authorization, tenant isolation, failure, and retry paths are tested;
 - provider calls are billed and observable;
 - formatting, import order, static checks, and relevant tests pass;
