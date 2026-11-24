@@ -180,6 +180,7 @@ class ChatNamespace(socketio.AsyncNamespace):
 
         # Send conversation history
         await coordinator.send_conversation_history()
+        await coordinator.sync_generations()
 
         # Send latest learning progress if applicable
         await coordinator.send_latest_learning_progress()
@@ -272,22 +273,17 @@ class ChatNamespace(socketio.AsyncNamespace):
             await sio.enter_room(sid, room_name, namespace='/chat')
             session['subscriptions'].add(conv_id)
 
-            # A coordinator still running a turn owns that turn's task; reuse it
-            # so Stop keeps working after the user switches chats and back.
-            coordinator_key = f"{sid}_{conv_id}"
-            coordinator = self.coordinators.get(coordinator_key)
-            if coordinator is None or not coordinator.active_generation_ids():
-                coordinator = MessageCoordinator(
-                    conversation=conversation,
-                    user=user,
-                    platform=platform,
-                    send_callback=self._create_send_callback(sid, conv_id),
-                )
-                self.coordinators[coordinator_key] = coordinator
+            coordinator = MessageCoordinator(
+                conversation=conversation,
+                user=user,
+                platform=platform,
+                send_callback=self._create_send_callback(sid, conv_id),
+            )
+            self.coordinators[f"{sid}_{conv_id}"] = coordinator
 
             # Send conversation history
             await coordinator.send_conversation_history()
-            await coordinator.send_active_generations()
+            await coordinator.sync_generations()
 
             # Send latest learning progress if applicable
             await coordinator.send_latest_learning_progress()
@@ -327,13 +323,10 @@ class ChatNamespace(socketio.AsyncNamespace):
             # Pause any in-progress artifacts
             await self._pause_conversation_artifacts(conv_id)
             
-            # Keep a coordinator that is still running a turn: the turn keeps
-            # streaming to the room, and re-subscribing must find its task.
-            coordinator_key = f"{sid}_{conv_id}"
-            coordinator = self.coordinators.get(coordinator_key)
-            if coordinator is None or not coordinator.active_generation_ids():
-                self.coordinators.pop(coordinator_key, None)
-            
+            # A running turn outlives its coordinator here: it keeps streaming
+            # to the room and is found again through the generation registry.
+            self.coordinators.pop(f"{sid}_{conv_id}", None)
+
             logger.info(f"Unsubscribed from conversation: conv_id={conv_id}")
             return {'success': True}
             
@@ -607,8 +600,10 @@ class ChatNamespace(socketio.AsyncNamespace):
         """
         Stop the in-flight AI response for a conversation.
 
-        Cancels the generation task on this worker, which unwinds the
-        provider stream and finalizes the partial message.
+        The turn may run on another worker or under an earlier socket, so the
+        request goes through the generation registry; the owning worker
+        cancels it, which unwinds the provider stream and finalizes the
+        partial message.
 
         Args:
             sid: Socket session ID
@@ -636,11 +631,11 @@ class ChatNamespace(socketio.AsyncNamespace):
             except (TypeError, ValueError):
                 message_id = None
 
-            cancelled = coordinator.cancel_generation(message_id)
+            requested = await coordinator.request_stop(message_id)
             logger.info(
-                f"Stop generation: conv_id={conv_id}, message_id={message_id}, cancelled={cancelled}"
+                f"Stop generation: conv_id={conv_id}, message_id={message_id}, requested={requested}"
             )
-            return {'success': cancelled}
+            return {'success': requested}
 
         except Exception as e:
             logger.exception(f"Stop generation error: {str(e)}")

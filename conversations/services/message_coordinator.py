@@ -18,9 +18,11 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from channels.db import database_sync_to_async
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from djangorestframework_camel_case.util import camelize
+from redis.exceptions import RedisError
 
 from billing.constants import LITELLM_SPEND_LIMIT_REACHED
 from billing.exceptions import BotModelUnavailable, PaymentRequiredError
@@ -44,6 +46,7 @@ from conversations.models import (
     Snippet,
     WebSearchSource,
 )
+from conversations.services import generation_registry
 from conversations.services.ensemble_service import (
     EnsembleTurnService,
     ensemble_enabled_for,
@@ -102,6 +105,14 @@ _DISPATCH_ERROR_CODES = {
     "BOT_CONFIG_UNAVAILABLE": "bot_config_unavailable",
     "LITELLM_UNAVAILABLE": ErrorCode.VALIDATION_ERROR,
 }
+
+
+# Regenerating an older reply is rare; a reconnect checks only the recent ones.
+RECENT_REPLIES_CHECKED = 20
+INTERRUPTED_REPLY = (
+    "*This answer was interrupted before it finished. "
+    "Your request is saved, so you can regenerate it.*"
+)
 
 
 class MessageCoordinator:
@@ -446,6 +457,9 @@ class MessageCoordinator:
                 sender=DEFAULT_AI_SENDER_NAME,
                 descriptor=descriptor,
             )
+            # Live from the moment it exists, so an empty reply with no live
+            # key always means its turn died.
+            await generation_registry.mark_live(ai_message.id, self.conversation.id)
 
             # Send empty AI message with streaming=True to show placeholder on frontend
             placeholder_payload = await WebSocketResponseService.format_message(
@@ -656,6 +670,7 @@ class MessageCoordinator:
             self.stream_ai_response(message_obj=message_obj, **kwargs)
         )
         self._generation_tasks[message_obj.id] = task
+        heartbeat = asyncio.create_task(self._keep_turn_live(message_obj.id, task))
         try:
             await task
         except asyncio.CancelledError:
@@ -663,7 +678,30 @@ class MessageCoordinator:
                 raise
             logger.info("[journey] mid=%s generation task cancelled", message_obj.id)
         finally:
+            heartbeat.cancel()
             self._generation_tasks.pop(message_obj.id, None)
+            try:
+                await generation_registry.clear(message_obj.id)
+            except RedisError:
+                logger.exception("Could not clear generation %s", message_obj.id)
+
+    async def _keep_turn_live(self, message_id: int, task: asyncio.Task) -> None:
+        """Publish the turn as running and act on Stop sent to any worker.
+
+        A reconnecting browser can land on another worker or socket, so the
+        registry, not this coordinator, is how it finds and stops the turn.
+        """
+        conversation_id = str(self.conversation.id)
+        while not task.done():
+            try:
+                await generation_registry.mark_live(message_id, conversation_id)
+                if await generation_registry.stop_requested(
+                    message_id
+                ) and self.cancel_generation(message_id):
+                    logger.info("[journey] mid=%s stop requested", message_id)
+            except RedisError:
+                logger.exception("Generation heartbeat failed for %s", message_id)
+            await asyncio.sleep(generation_registry.HEARTBEAT_SECONDS)
 
     async def _record_history_limit(self, history_limit: int) -> None:
         """Keep the conversation's stored window equal to what the bot replays."""
@@ -708,10 +746,8 @@ class MessageCoordinator:
         for key in SOURCE_KEYS:
             message_data[key] = []
 
-    def cancel_generation(self, message_id: Optional[int] = None) -> bool:
+    def cancel_generation(self, message_id: int) -> bool:
         """Cancel the in-flight AI turn; returns True when a cancel was issued."""
-        if message_id is None:
-            message_id = next(iter(self._cancellable_message_ids), None)
         task = self._generation_tasks.get(message_id)
         if (
             task is None
@@ -723,23 +759,64 @@ class MessageCoordinator:
         task.cancel()
         return True
 
-    def active_generation_ids(self) -> List[int]:
-        """AI message ids still streaming (and stoppable) on this coordinator."""
-        return [
-            mid
-            for mid in self._cancellable_message_ids
-            if mid in self._generation_tasks and not self._generation_tasks[mid].done()
-        ]
+    async def request_stop(self, message_id: Optional[int]) -> bool:
+        """Stop a running reply here or on another worker; None means the newest."""
+        if message_id is None:
+            replies = await self._recent_ai_replies()
+            live = await generation_registry.live_ids(
+                self.conversation.id, [reply.id for reply in replies]
+            )
+            if not live:
+                return False
+            message_id = max(live)
+        return await generation_registry.request_stop(self.conversation.id, message_id)
 
-    async def send_active_generations(self) -> None:
-        """Tell a re-attaching client which messages are still being generated.
+    async def sync_generations(self) -> None:
+        """Tell a (re)subscribing client how each recent reply stands.
 
-        Persisted history holds only the empty placeholder until the turn is
-        finalized, so without this a client that switched away and back
-        renders a running turn as finished.
+        Persisted history holds only the empty placeholder until a turn is
+        finalized. A turn still running on any worker is announced as
+        ``generation_active``; one that died with its worker is saved as
+        interrupted so it stops looking like an empty answer.
         """
-        for message_id in self.active_generation_ids():
-            await self.send({"type": "generation_active", "messageId": message_id})
+        replies = await self._recent_ai_replies()
+        live = await generation_registry.live_ids(
+            self.conversation.id, [reply.id for reply in replies]
+        )
+        for reply in replies:
+            if reply.id in live:
+                await self.send({"type": "generation_active", "messageId": reply.id})
+            elif generation_registry.is_interrupted(reply.message, reply.has_files):
+                await self._mark_interrupted(reply)
+
+    @database_sync_to_async
+    def _recent_ai_replies(self) -> List[Message]:
+        return list(
+            Message.active_objects.filter(
+                conversation=self.conversation,
+                sender_type=SenderType.AI_ASSISTANT,
+            )
+            .annotate(
+                has_files=Exists(
+                    Message.files.through.objects.filter(message_id=OuterRef("pk"))
+                )
+            )
+            .order_by("-id")[:RECENT_REPLIES_CHECKED]
+        )
+
+    async def _mark_interrupted(self, reply: Message) -> None:
+        updated = await database_sync_to_async(
+            Message._base_manager.filter(pk=reply.pk, message="").update
+        )(message=INTERRUPTED_REPLY)
+        if not updated:
+            return
+        reply.message = INTERRUPTED_REPLY
+        logger.info("[journey] mid=%s marked interrupted", reply.id)
+        await self.send(
+            await WebSocketResponseService.format_message(
+                message=reply, is_sender=False, streaming=False
+            )
+        )
 
     async def stream_ai_response(
         self,
