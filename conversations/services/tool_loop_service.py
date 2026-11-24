@@ -185,9 +185,10 @@ class ToolLoopService:
             regenerate,
         )
         emitter = ToolEventEmitter(binding.send_callback, binding.correlation)
-        if prepared.context_trace and prepared.context_trace["stages"]:
+        if prepared.context_trace:
             # Persist first, then emit: a client that misses the event (or
-            # refreshes) still gets the trace from the turn's payload.
+            # refreshes) still gets the trace from the turn's payload. An empty
+            # trace is kept too: it records that the prompt carried no sources.
             await binding.store.save_context_trace(prepared.context_trace)
             await emitter.context_trace(prepared.context_trace)
         usage = UsageAccumulator()
