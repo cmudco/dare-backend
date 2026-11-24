@@ -12,6 +12,7 @@ from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
 
 from .constants import (
+    DEFAULT_MAX_INPUT_TOKENS,
     ArtifactStatus,
     ArtifactType,
     ConversationSource,
@@ -105,6 +106,13 @@ class LLM(models.Model):
         default=False,
         help_text="Whether the model supports audio transcription (e.g., Whisper, Gemini).",
     )
+    max_input_tokens = models.PositiveIntegerField(
+        default=DEFAULT_MAX_INPUT_TOKENS,
+        help_text=(
+            "Largest prompt the model accepts, in tokens. Files picked for "
+            "reading in full are sent whole while they fit in half of it."
+        ),
+    )
     tier = models.CharField(
         max_length=20,
         choices=ModelTier.choices,
@@ -145,6 +153,10 @@ class LLM(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def full_files_token_budget(self) -> int:
+        return self.max_input_tokens // 2
 
     @property
     def is_special_purpose(self) -> bool:

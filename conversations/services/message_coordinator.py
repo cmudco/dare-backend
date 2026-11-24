@@ -84,6 +84,8 @@ from core.services.llm_service import LLMService
 from core.services.sb_client import SocraticBooksClient
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
 from feature_flags.constants import ENABLE_RAG
+from files.models import File
+from files.services.source_size import estimate_source_size
 from feature_flags.services import is_flag_enabled_for_user
 from memory.tasks import run_memory_writer
 from users.constants import AuthSourceChoice
@@ -730,6 +732,31 @@ class MessageCoordinator:
             return None
         return ensemble
 
+    @database_sync_to_async
+    def _search_files_too_large_to_read(
+        self, message_data: Dict[str, Any], llm: LLM
+    ) -> None:
+        """Search the documents picked for reading in full when they do not fit.
+
+        Attached images stay in ``file_ids``; only documents count and move.
+        """
+        file_ids = message_data.get("file_ids")
+        if not file_ids:
+            return
+        documents = File.active_objects.filter(id__in=file_ids, is_media=False)
+        if estimate_source_size(documents).fits(llm.full_files_token_budget):
+            return
+        document_ids = set(documents.values_list("id", flat=True))
+        message_data["file_ids"] = [
+            file_id
+            for file_id in file_ids
+            if int(file_id) not in document_ids
+        ]
+        message_data["embedding_ids"] = [
+            *(message_data.get("embedding_ids") or []),
+            *sorted(document_ids),
+        ]
+
     async def _drop_disabled_sources(self, message_data: Dict[str, Any]) -> None:
         """Empty the turn's document sources when they are switched off.
 
@@ -854,6 +881,7 @@ class MessageCoordinator:
                 message_data.get("web_search_enabled", False),
             )
             await self._drop_disabled_sources(message_data)
+            await self._search_files_too_large_to_read(message_data, llm)
             # Build LLM query request using DTO builder
             # Note: mcp_server_ids are automatically extracted in the builder
             request = LLMQueryRequestBuilder.from_message_data(

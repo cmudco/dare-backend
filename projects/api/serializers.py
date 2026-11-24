@@ -4,8 +4,8 @@ from rest_framework import serializers
 from core.services.model_ref import ModelRefUnavailable, resolve_model_ref
 from files.models import File, Folder
 from libraries.models import SharedLibrary, UserLibraryAccess
+from files.services.source_size import SourceSize, estimate_source_size
 from projects.constants import (
-    FULL_FILES_TOKEN_LIMIT,
     PROJECT_DESCRIPTION_MAX_LENGTH,
     PROJECT_INSTRUCTIONS_MAX_LENGTH,
     PROJECT_NAME_MAX_LENGTH,
@@ -13,8 +13,7 @@ from projects.constants import (
 )
 from projects.models import PersonalProject
 from projects.services.project_service import (
-    SourceSize,
-    estimate_source_size,
+    full_files_token_budget,
     project_model_ref,
     selected_source_files,
     set_project_instructions,
@@ -24,13 +23,13 @@ from workflows.constants import WorkflowKind
 from workflows.models import Workflow
 
 
-def full_files_too_large_message(size: SourceSize) -> str:
+def full_files_too_large_message(size: SourceSize, token_budget: int) -> str:
     return _(
         "These files are about %(tokens)s tokens, over the %(limit)s-token "
         "limit for reading in full. Use search instead."
     ) % {
         "tokens": f"{size.estimated_tokens:,}",
-        "limit": f"{FULL_FILES_TOKEN_LIMIT:,}",
+        "limit": f"{token_budget:,}",
     }
 
 
@@ -163,9 +162,15 @@ class PersonalProjectSerializer(serializers.ModelSerializer):
                 [folder.pk for folder in folders],
             )
         )
-        if not size.fits_full_files:
+        llm = (
+            attrs["default_model"]
+            if "default_model" in attrs
+            else (project.default_model if project else None)
+        )
+        token_budget = full_files_token_budget(llm)
+        if not size.fits(token_budget):
             raise serializers.ValidationError(
-                {"source_mode": full_files_too_large_message(size)}
+                {"source_mode": full_files_too_large_message(size, token_budget)}
             )
 
     def to_representation(self, instance):
@@ -196,6 +201,7 @@ class SourceSizeRequestSerializer(serializers.Serializer):
     folder_ids = serializers.PrimaryKeyRelatedField(
         many=True, required=False, default=list, queryset=Folder.objects.none()
     )
+    model_ref = serializers.CharField(required=False, allow_blank=True, default="")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -207,12 +213,15 @@ class SourceSizeRequestSerializer(serializers.Serializer):
             user=user
         )
 
+    def validate_model_ref(self, value):
+        try:
+            return resolve_model_ref(self.context["request"].user, value).llm
+        except ModelRefUnavailable as exc:
+            raise serializers.ValidationError(str(exc))
+
 
 class SourceSizeSerializer(serializers.Serializer):
     file_count = serializers.IntegerField()
     estimated_tokens = serializers.IntegerField()
-    token_limit = serializers.SerializerMethodField()
+    token_limit = serializers.IntegerField()
     fits_full_files = serializers.BooleanField()
-
-    def get_token_limit(self, size) -> int:
-        return FULL_FILES_TOKEN_LIMIT

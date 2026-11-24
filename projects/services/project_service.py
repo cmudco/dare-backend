@@ -1,23 +1,19 @@
 """Use cases for personal projects: listing, new-chat defaults, deletion, memory scope."""
 
-import math
 from dataclasses import dataclass
 from typing import Iterable, Optional, Tuple
 
 from django.db import transaction
-from django.db.models import Count, F, IntegerField, Max, Q, QuerySet, Sum
-from django.db.models.functions import Coalesce, Greatest, Length
+from django.db.models import Count, Max, Q, QuerySet
+from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
 
-from conversations.models import Conversation
+from conversations.constants import DEFAULT_FULL_FILES_TOKEN_BUDGET
+from conversations.models import LLM, Conversation
 from core.services.model_ref import model_ref
 from files.models import File
 from libraries.models import UserLibraryAccess
-from projects.constants import (
-    FULL_FILES_TOKEN_LIMIT,
-    ProjectMemoryScope,
-    ProjectSourceMode,
-)
+from projects.constants import ProjectMemoryScope, ProjectSourceMode
 from projects.models import PersonalProject
 from prompts.services.prompt_service import PromptService, PromptServiceError
 
@@ -30,16 +26,9 @@ class ProjectChatSources:
     library_ids: Tuple[int, ...]
 
 
-@dataclass(frozen=True)
-class SourceSize:
-    """Rough prompt cost of reading a set of files in full."""
-
-    file_count: int
-    estimated_tokens: int
-
-    @property
-    def fits_full_files(self) -> bool:
-        return self.estimated_tokens <= FULL_FILES_TOKEN_LIMIT
+def full_files_token_budget(llm: Optional[LLM]) -> int:
+    """Tokens of files a chat on this model reads in full before it searches."""
+    return llm.full_files_token_budget if llm else DEFAULT_FULL_FILES_TOKEN_BUDGET
 
 
 def project_model_ref(project: PersonalProject) -> Optional[str]:
@@ -75,24 +64,6 @@ def _document_files(user) -> QuerySet:
     return File.active_objects.filter(user=user, is_media=False)
 
 
-def estimate_source_size(files: QuerySet) -> SourceSize:
-    """Estimate tokens at four characters each from the cached extraction.
-
-    A file not parsed yet counts its byte size, which overstates the text, so
-    an unparsed file can push a set into search but never sneak it past.
-    """
-    totals = files.aggregate(
-        file_count=Count("id", distinct=True),
-        chars=Sum(
-            Coalesce(Length("extracted_text"), F("size"), output_field=IntegerField())
-        ),
-    )
-    return SourceSize(
-        file_count=totals["file_count"],
-        estimated_tokens=math.ceil((totals["chars"] or 0) / 4),
-    )
-
-
 def selected_source_files(
     user, file_ids: Iterable[int], folder_ids: Iterable[int]
 ) -> QuerySet:
@@ -125,14 +96,6 @@ def resolve_chat_sources(project: PersonalProject) -> ProjectChatSources:
     return ProjectChatSources(file_ids=file_ids, library_ids=library_ids)
 
 
-def chat_reads_full_files(project: PersonalProject, file_ids: Tuple[int, ...]) -> bool:
-    """Full files only while they fit; folders that grew past the limit search."""
-    if project.source_mode != ProjectSourceMode.FULL or not file_ids:
-        return False
-    files = _document_files(project.user).filter(id__in=file_ids)
-    return estimate_source_size(files).fits_full_files
-
-
 def start_chat_in_project(conversation: Conversation) -> None:
     """Copy the project's defaults onto a freshly created chat.
 
@@ -140,7 +103,7 @@ def start_chat_in_project(conversation: Conversation) -> None:
     """
     project = conversation.project
     sources = resolve_chat_sources(project)
-    if chat_reads_full_files(project, sources.file_ids):
+    if project.source_mode == ProjectSourceMode.FULL:
         conversation.selected_file_ids = list(sources.file_ids)
         conversation.selected_embedding_ids = []
     else:

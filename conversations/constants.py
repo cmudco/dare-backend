@@ -147,6 +147,11 @@ DEFAULT_MAX_CONTEXT_SNIPPETS = 4
 DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD = 0.5
 DEFAULT_HISTORY_LIMIT = 20
 
+# Files picked for reading in full are sent whole only while they fit in half
+# the model's input window, leaving the rest for history and the reply.
+DEFAULT_MAX_INPUT_TOKENS = 200_000
+DEFAULT_FULL_FILES_TOKEN_BUDGET = DEFAULT_MAX_INPUT_TOKENS // 2
+
 # Default learning progress tracking prompt (for Socratic platform)
 DEFAULT_TRACKING_PROMPT = """You are an AI tutor designed to assess student learning progress. Based on the conversation history and learning goals provided, evaluate the student's understanding and provide constructive feedback.
 
