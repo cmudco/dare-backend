@@ -8,9 +8,10 @@ from projects.api.serializers import (
     SourceSizeRequestSerializer,
     SourceSizeSerializer,
 )
+from files.services.source_size import estimate_source_size
 from projects.services.project_service import (
     delete_project,
-    estimate_source_size,
+    full_files_token_budget,
     owned_projects,
     selected_source_files,
 )
@@ -66,7 +67,18 @@ class PersonalProjectViewSet(viewsets.ModelViewSet):
             [file.pk for file in query.validated_data["file_ids"]],
             [folder.pk for folder in query.validated_data["folder_ids"]],
         )
-        return Response(SourceSizeSerializer(estimate_source_size(files)).data)
+        size = estimate_source_size(files)
+        token_budget = full_files_token_budget(query.validated_data["model_ref"])
+        return Response(
+            SourceSizeSerializer(
+                {
+                    "file_count": size.file_count,
+                    "estimated_tokens": size.estimated_tokens,
+                    "token_limit": token_budget,
+                    "fits_full_files": size.fits(token_budget),
+                }
+            ).data
+        )
 
     def _reloaded(self, pk: int) -> dict:
         """Re-read through the annotated queryset so counts are in the payload."""

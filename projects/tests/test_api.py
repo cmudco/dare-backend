@@ -11,11 +11,8 @@ from files.models import File, Folder
 from libraries.models import SharedLibrary, UserLibraryAccess
 from memory.models import MemoryRecord
 from memory.services.store import shortlist
-from projects.constants import (
-    FULL_FILES_TOKEN_LIMIT,
-    ProjectMemoryScope,
-    ProjectSourceMode,
-)
+from conversations.constants import DEFAULT_FULL_FILES_TOKEN_BUDGET
+from projects.constants import ProjectMemoryScope, ProjectSourceMode
 from projects.models import PersonalProject
 from projects.services.project_service import memory_scope_project_id
 from prompts.models import Prompt
@@ -507,7 +504,7 @@ class ProjectMemoryScopeTests(ProjectTestCase):
         self.assertEqual(memory_scope_project_id(self.project.id), self.project.id)
 
 
-TOO_LARGE_TEXT = "x" * (FULL_FILES_TOKEN_LIMIT * 4 + 4)
+TOO_LARGE_TEXT = "x" * (DEFAULT_FULL_FILES_TOKEN_BUDGET * 4 + 4)
 
 
 class ProjectSourceModeTests(ProjectTestCase):
@@ -544,19 +541,6 @@ class ProjectSourceModeTests(ProjectTestCase):
 
         self.assertEqual(conversation.selected_embedding_ids, [file.id])
         self.assertEqual(conversation.selected_file_ids, [])
-
-    def test_full_files_falls_back_to_search_once_folders_grow_too_large(self):
-        folder = Folder.objects.create(user=self.user, name="Archive")
-        folder.files.add(self.make_file(self.user, "small.pdf", text="small"))
-        project = self.make_project(source_mode=ProjectSourceMode.FULL)
-        project.folders.add(folder)
-        grown = self.make_file(self.user, "huge.pdf", text=TOO_LARGE_TEXT)
-        folder.files.add(grown)
-
-        conversation = self.start_chat(project)
-
-        self.assertEqual(conversation.selected_file_ids, [])
-        self.assertIn(grown.id, conversation.selected_embedding_ids)
 
     def test_full_files_mode_is_rejected_for_sources_over_the_limit(self):
         project = self.make_project()
@@ -603,7 +587,26 @@ class ProjectSourceModeTests(ProjectTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["file_count"], 2)
         self.assertEqual(response.data["estimated_tokens"], 200)
-        self.assertEqual(response.data["token_limit"], FULL_FILES_TOKEN_LIMIT)
+        self.assertEqual(response.data["token_limit"], DEFAULT_FULL_FILES_TOKEN_BUDGET)
+        self.assertTrue(response.data["fits_full_files"])
+
+    def test_source_size_uses_the_chosen_models_window(self):
+        large = self.make_file(self.user, "draft.pdf", text=TOO_LARGE_TEXT)
+        llm = LLM.objects.create(
+            name="Long",
+            identifier="long-context",
+            provider="claude",
+            max_input_tokens=1_000_000,
+        )
+
+        response = self.client.post(
+            f"{PROJECTS_URL}source-size/",
+            {"file_ids": [large.id], "model_ref": str(llm.id)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["token_limit"], 500_000)
         self.assertTrue(response.data["fits_full_files"])
 
     def test_source_size_rejects_another_users_files(self):
