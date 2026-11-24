@@ -583,7 +583,7 @@ class GroupOwnerKeyTests(TestCase):
         )
 
         self.owner.access_code_group = self.group
-        self.owner.save()
+        self.owner.save(update_fields=["access_code_group"])
         self.assertIsNone(WalletService.get_litellm_spend_limit(self.owner))
         get_dispatch_credentials_for_user_sync("custom", self.owner)
 
