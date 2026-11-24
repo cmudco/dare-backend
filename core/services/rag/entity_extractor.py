@@ -21,6 +21,7 @@ from core.config.entities import (
     MIN_ENTITY_CHARS,
     NER_LABELS,
     NER_LOAD_RETRY_SECONDS,
+    NER_QUERY_LABELS,
     NER_THRESHOLD,
 )
 from core.services.rag.config import flag, setting
@@ -34,6 +35,8 @@ _model_cache: Dict[str, Predictor] = {}
 # backs off instead of every file in the queue retrying an untimed download.
 _load_failures: Dict[str, float] = {}
 
+_STORED_KINDS = {query: kind for kind, query in NER_QUERY_LABELS.items()}
+
 
 @dataclass(frozen=True)
 class EntityMention:
@@ -45,7 +48,8 @@ class EntityMention:
 
 
 def normalize_key(kind: str, text: str) -> str:
-    key = re.sub(r"\s+", " ", (text or "").strip().lower()).strip(" .,;:'\"()[]")
+    key = re.sub(r"[()\[\]]", "", (text or "").lower())
+    key = re.sub(r"\s+", " ", key).strip(" .,;:'\"-")
     if kind == "person":
         for honorific in HONORIFICS:
             if key.startswith(honorific + " "):
@@ -64,7 +68,12 @@ def normalize_key(kind: str, text: str) -> str:
 
 
 def _keep(kind: str, key: str) -> bool:
-    return len(key) >= MIN_ENTITY_CHARS and key not in ENTITY_STOP_WORDS
+    if len(key) < MIN_ENTITY_CHARS or key in ENTITY_STOP_WORDS:
+        return False
+    if kind == "identifier":
+        # GLiNER also tags code words and plain numbers; a real identifier mixes both.
+        return any(c.isdigit() for c in key) and any(c.isalpha() for c in key)
+    return True
 
 
 def _merge(mentions: List[EntityMention]) -> List[EntityMention]:
@@ -135,7 +144,11 @@ class NerExtractor:
             self._failed = True
             return []
         try:
-            rows = predictor(text, NER_LABELS, NER_THRESHOLD)
+            rows = predictor(
+                text,
+                [NER_QUERY_LABELS.get(label, label) for label in NER_LABELS],
+                NER_THRESHOLD,
+            )
         except Exception as error:
             self._failed = True
             logger.warning(
@@ -144,7 +157,9 @@ class NerExtractor:
             return []
         found: List[EntityMention] = []
         for row in rows:
-            kind = str(row.get("label", "")).lower()
+            kind = _STORED_KINDS.get(
+                str(row.get("label", "")).lower(), str(row.get("label", "")).lower()
+            )
             key = normalize_key(kind, str(row.get("text", "")))
             if kind in NER_LABELS and _keep(kind, key):
                 found.append(

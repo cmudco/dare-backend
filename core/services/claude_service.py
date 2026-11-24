@@ -97,6 +97,7 @@ class ClaudeService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None,
+        allow_tool_calls: bool = True,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from Claude API.
@@ -122,7 +123,12 @@ class ClaudeService:
             sandbox = sandbox_marker(tools)
             new_container = self._sandbox_container_id is None
             stream = await self._create_stream(
-                prepared_messages, max_tokens, temperature, effort, tools
+                prepared_messages,
+                max_tokens,
+                temperature,
+                effort,
+                tools,
+                allow_tool_calls,
             )
 
             # Step 3: Process and yield stream events
@@ -292,6 +298,7 @@ class ClaudeService:
         temperature: float,
         effort: Optional[str],
         tools: Optional[List[Dict]],
+        allow_tool_calls: bool = True,
     ):
         """
         Create Claude streaming response.
@@ -315,6 +322,10 @@ class ClaudeService:
         )
         if sandbox:
             await self._open_sandbox(call_params, sandbox)
+        if call_params.get("tools") and not allow_tool_calls:
+            # Claude binds its earlier thinking to the tool list, so a round
+            # that must answer in text keeps the tools and forbids calling them.
+            call_params["tool_choice"] = {"type": "none"}
 
         return await self.client.messages.create(**call_params)
 

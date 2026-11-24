@@ -52,6 +52,27 @@ class VisionHandler:
         return -1
 
     @staticmethod
+    def with_content(messages: List[Dict], index: int, content: List[Dict]) -> List[Dict]:
+        """
+        A copy of the history with one message's content replaced.
+
+        The caller's list is the turn's working history and is sent again on
+        every tool round, so it must stay untouched: rewriting it in place
+        wraps the already-wrapped message on the second round.
+
+        Args:
+            messages: List of message dictionaries
+            index: Position of the message to replace
+            content: New content parts for that message
+
+        Returns:
+            New messages list; the original list and its messages are unchanged
+        """
+        prepared = list(messages)
+        prepared[index] = {**messages[index], "content": content}
+        return prepared
+
+    @staticmethod
     def separate_images_and_videos(media_items: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
         """
         Separate media items into images and videos based on MIME type.
@@ -99,7 +120,7 @@ class OpenAIVisionHandler:
             images: List of media dictionaries with 'preview' (base64 URL), 'type' (MIME)
 
         Returns:
-            Modified messages list with media added
+            New messages list with media added
         """
         idx = VisionHandler.find_last_user_message_index(messages)
         if idx == -1:
@@ -138,8 +159,7 @@ class OpenAIVisionHandler:
                 # Add error note to message
                 content_parts[0]["text"] += f"\n\n[Note: Could not process {len(video_items)} video(s) - video analysis not available]"
 
-        messages[idx]["content"] = content_parts
-        return messages
+        return VisionHandler.with_content(messages, idx, content_parts)
 
     @staticmethod
     def _extract_video_frames(videos: List[Dict], fps: float = 1.0, max_frames: int = 10) -> List[Dict]:
@@ -254,7 +274,7 @@ class ClaudeVisionHandler:
             images: List of media dictionaries with 'preview', 'type'
 
         Returns:
-            Modified messages list with images added (videos excluded)
+            New messages list with images added (videos excluded)
         """
         idx = VisionHandler.find_last_user_message_index(messages)
         if idx == -1:
@@ -288,8 +308,7 @@ class ClaudeVisionHandler:
             content_parts[0]["text"] += video_warning
             logger.info(f"Filtered out {len(video_items)} video(s) for Claude (not supported)")
 
-        messages[idx]["content"] = content_parts
-        return messages
+        return VisionHandler.with_content(messages, idx, content_parts)
 
     @staticmethod
     def convert_image_parts(messages: List[Dict]) -> List[Dict]:
@@ -351,7 +370,7 @@ class GeminiVisionHandler:
             images: List of media dictionaries with 'preview' (data URL), 'type' (MIME)
 
         Returns:
-            Modified messages list with media added
+            New messages list with media added
         """
         idx = VisionHandler.find_last_user_message_index(messages)
         if idx == -1:
@@ -361,7 +380,7 @@ class GeminiVisionHandler:
         image_items, video_items = VisionHandler.separate_images_and_videos(images)
 
         text_content = messages[idx]["content"]
-        messages[idx]["content"] = [
+        content_parts = [
             {"type": "text", "text": text_content},
             *[
                 {
@@ -382,7 +401,7 @@ class GeminiVisionHandler:
         # Add note if videos are included
         if video_items:
             video_note = f"\n\n[Note: {len(video_items)} video(s) included for analysis]"
-            messages[idx]["content"][0]["text"] += video_note
+            content_parts[0]["text"] += video_note
             logger.info(f"Added {len(video_items)} video(s) for Gemini processing")
 
-        return messages
+        return VisionHandler.with_content(messages, idx, content_parts)

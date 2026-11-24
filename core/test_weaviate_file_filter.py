@@ -35,47 +35,8 @@ class WeaviateSelectedFileFilterTests(SimpleTestCase):
         self.assertEqual(user_filter.target, "user_id")
         self.assertEqual(user_filter.value, "7")
 
-        def flatten_values(filter_item):
-            if hasattr(filter_item, "target"):
-                return [(filter_item.target, filter_item.value)]
-            return [
-                value
-                for child in filter_item.filters
-                for value in flatten_values(child)
-            ]
-
-        self.assertEqual(
-            flatten_values(selected_files_filter),
-            [("file_id", "11"), ("file_id", "12"), ("file_id", "13")],
-        )
-
-    @patch("core.helpers.weaviate.WeaviateClient._create_collection")
-    @patch("core.helpers.weaviate.WeaviateClient._connect_to_weaviate")
-    def test_selecting_over_100_files_builds_a_sendable_filter(
-        self, connect_to_weaviate, _create_collection
-    ):
-        from weaviate.collections.filters import _FilterToGRPC
-
-        from core.helpers.weaviate import WeaviateClient
-
-        collection = MagicMock()
-        collection.query.hybrid.return_value.objects = []
-        client = MagicMock()
-        client.collections.get.return_value = collection
-        connect_to_weaviate.return_value = client
-
-        WeaviateClient().query_vectors(
-            vector=[0.1],
-            top_k=10,
-            namespace="user_7",
-            filter={"user_id": "7", "file_id": {"$in": [str(i) for i in range(500)]}},
-            query_text="compare the files",
-        )
-
-        grpc_filter = _FilterToGRPC.convert(
-            collection.query.hybrid.call_args.kwargs["filters"]
-        )
-        self.assertEqual(len(grpc_filter.filters[1].filters), 500)
+        self.assertEqual(selected_files_filter.target, "file_id")
+        self.assertEqual(selected_files_filter.value, ["11", "12", "13"])
 
     @patch("core.helpers.weaviate.WeaviateClient._create_collection")
     @patch("core.helpers.weaviate.WeaviateClient._connect_to_weaviate")

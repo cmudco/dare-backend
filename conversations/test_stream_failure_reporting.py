@@ -39,7 +39,7 @@ class StreamFailureReportingTests(SimpleTestCase):
             )
         )
 
-        async def stalled_round(*args):
+        async def stalled_round(*args, allow_tool_calls=True):
             yield LLMStreamEvent.text_delta("Partial answer")
             raise TimeoutError("The model stream was idle for 120 seconds")
 

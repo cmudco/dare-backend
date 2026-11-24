@@ -9,16 +9,19 @@ from rest_framework.test import APIRequestFactory
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
 from conversations.models import Conversation, Message
-from conversations.services.message_helpers.regeneration_helpers import \
-    prepare_regeneration_data
+from conversations.services.message_helpers.regeneration_helpers import (
+    prepare_regeneration_data,
+)
 from core.services.dtos import LLMQueryRequest, MediaConfig
 from core.services.file_upload_service import FileUploadService
 from core.services.llm_helpers.history_helpers import get_conversation_history
 from core.services.llm_utils.message_formatters import OpenAIMessageFormatter
-from core.services.llm_utils.provider_message_converters import \
-    ClaudeMessageConverter
-from core.services.llm_utils.vision_handlers import (ClaudeVisionHandler,
-                                                     OpenAIVisionHandler)
+from core.services.llm_utils.provider_message_converters import ClaudeMessageConverter
+from core.services.llm_utils.vision_handlers import (
+    ClaudeVisionHandler,
+    GeminiVisionHandler,
+    OpenAIVisionHandler,
+)
 
 PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
 IMAGE = {
@@ -50,6 +53,21 @@ class ImageOnlyProviderTests(SimpleTestCase):
                     p["type"] == "text" and not p["text"].strip()
                     for p in messages[0]["content"]
                 )
+            )
+
+    def test_image_turn_survives_a_tool_round_on_every_provider(self):
+        for handler in (OpenAIVisionHandler, ClaudeVisionHandler, GeminiVisionHandler):
+            messages = [{"role": "user", "content": "What is this?"}]
+            handler.add_images_to_messages(messages, [IMAGE])
+            # The tool loop appends to the same list and asks the model again.
+            messages.append({"role": "tool", "tool_call_id": "call_1", "content": "ok"})
+
+            second_round = handler.add_images_to_messages(messages, [IMAGE])
+
+            self.assertEqual(
+                second_round[0]["content"][0],
+                {"type": "text", "text": "What is this?"},
+                handler.__name__,
             )
 
     def test_claude_converts_restored_openai_images(self):

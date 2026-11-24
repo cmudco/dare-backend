@@ -29,6 +29,15 @@ WEB_SEARCH_HISTORY_NOTE = (
     "the answer was written but is not kept in history):"
 )
 
+# Sent when a turn runs out of tool calls, and replayed with that turn in
+# history: a model stopped mid-task otherwise ends its turn silently, and a
+# later turn that cannot see the limit disowns the answer that mentioned it.
+TOOL_BUDGET_SPENT_NOTE = (
+    "[Automatic note, not from the user] The tool limit for this turn has been "
+    "reached, so no further tool calls will run. Answer the user now from the "
+    "results above, and say plainly if any part of the request is not done."
+)
+
 
 def synthesize_tool_call_id(message_id: Any, round_index: int, position: int) -> str:
     """Deterministic id for providers that assign none (Gemini)."""
@@ -92,6 +101,11 @@ def build_tool_result_turn(result: ToolCallResult) -> Dict[str, Any]:
         "name": result.tool_name,
         "content": result.content,
     }
+
+
+def build_tool_budget_spent_turn() -> Dict[str, Any]:
+    """Turn telling the model its tool calls for this turn are used up."""
+    return {"role": "user", "content": TOOL_BUDGET_SPENT_NOTE}
 
 
 def build_history_tool_turns(

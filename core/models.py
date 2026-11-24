@@ -95,12 +95,14 @@ class PlatformSettings(TimeStampMixin):
     summary_model = _task_model_field(_("Conversation summaries"))
     memory_model = _task_model_field(_("Memory extraction"))
     query_analysis_model = _task_model_field(_("Retrieval query analysis"))
+    graph_relations_model = _task_model_field(_("Knowledge graph relationship types"))
 
     TASK_FIELDS = {
         BackgroundTask.TITLES: "title_model",
         BackgroundTask.SUMMARIES: "summary_model",
         BackgroundTask.MEMORY: "memory_model",
         BackgroundTask.QUERY_ANALYSIS: "query_analysis_model",
+        BackgroundTask.GRAPH_RELATIONS: "graph_relations_model",
     }
 
     class Meta:

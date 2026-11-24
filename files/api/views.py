@@ -37,13 +37,8 @@ from core.services.vision_model_service import (
     resolve_vision_model,
     select_vision_model,
 )
-from core.storage.backends import SyftBoxStorage
 from core.storage.constants import StorageBackendChoice
-from core.storage.permission_service import SyftBoxPermissionService
-from syftbox.services.syftbox_file_service import SyftBoxFileService
-from syftbox.services.syftbox_permission_service import (
-    SyftBoxPermissionService as SyftBoxApiPermissionService,
-)
+from feature_flags.permissions import IsOcrEnabled, IsRagEnabled
 
 from ..constants import ALLOWED_FILES, FileStatus
 from ..models import DocumentChunk, File, FileShare, Folder, Tag
@@ -95,6 +90,15 @@ from .serializers import (
     VisionModelSelectionSerializer,
 )
 
+# Only reached for SyftBox-backed files, which cannot exist without the package.
+if settings.SYFTBOX_INSTALLED:
+    from core.storage.backends import SyftBoxStorage
+    from core.storage.permission_service import SyftBoxPermissionService
+    from syftbox.services.syftbox_file_service import SyftBoxFileService
+    from syftbox.services.syftbox_permission_service import (
+        SyftBoxPermissionService as SyftBoxApiPermissionService,
+    )
+
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -107,6 +111,18 @@ class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     parser_classes = (MultiPartParser, FormParser, JSONParser)
+
+    # Actions that start document processing. Reading, serving and deleting
+    # stay open so existing files (chat images included) remain reachable.
+    PROCESSING_ACTIONS = ("create", "reprocess", "import_file", "approve_ocr")
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.action in self.PROCESSING_ACTIONS:
+            permissions.append(IsRagEnabled())
+        if self.action == "approve_ocr":
+            permissions.append(IsOcrEnabled())
+        return permissions
 
     def get_queryset(self):
         return (
@@ -1252,6 +1268,12 @@ class FolderViewSet(viewsets.ModelViewSet):
             )
             .order_by(Lower("name"))
         )
+
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if self.action == "create":
+            permissions.append(IsRagEnabled())
+        return permissions
 
     def create(self, request):
         """

@@ -58,6 +58,8 @@ from core.services.vision_model_service import (
     resolve_vision_model,
     select_vision_model,
 )
+from feature_flags.constants import ENABLE_OCR
+from feature_flags.services import is_flag_enabled_for_user
 from files.models import DocumentEnrichmentCache, DocumentOcrRequest, File
 
 logger = logging.getLogger(__name__)
@@ -177,7 +179,7 @@ class DocumentEnrichmentService:
             # from costing the file the transcriptions it already paid for.
             return self._reuse_stored(file, parsed, model_payload)
         if (
-            not self._enabled()
+            not self._enabled(file)
             or parsed.parser != "docling"
             or not parsed.is_page_based
             or not (file.file.name or "").lower().endswith(".pdf")
@@ -496,8 +498,10 @@ class DocumentEnrichmentService:
                 await close()
 
     @staticmethod
-    def _enabled() -> bool:
-        return bool(env.DOCUMENT_ENRICHMENT_ENABLED)
+    def _enabled(file: File) -> bool:
+        return bool(env.DOCUMENT_ENRICHMENT_ENABLED) and is_flag_enabled_for_user(
+            file.user, ENABLE_OCR
+        )
 
     @staticmethod
     def _resolve_route(file: File) -> Optional[VisionModelRoute]:

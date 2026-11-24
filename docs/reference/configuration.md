@@ -52,15 +52,15 @@ them differently for local development.
 
 ## LLM providers
 
-`OPENAI_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`, `PINECONE_API_KEY` and
-`PINECONE_INDEX_NAME` must be present in the environment, or startup fails with
-`ImproperlyConfigured`. An empty value is allowed and disables that provider.
+Every provider key is optional. A provider with no key here and none in Django admin
+(Provider API Keys) is unavailable: a request to one of its models fails with a clear
+error and the rest of DARE keeps working.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | **Required** (may be empty) | OpenAI API key, for GPT models. |
-| `CLAUDE_API_KEY` | **Required** (may be empty) | Anthropic API key, for Claude models. |
-| `GEMINI_API_KEY` | **Required** (may be empty) | Google AI API key, for Gemini models. |
+| `OPENAI_API_KEY` | *(none)* | OpenAI API key, for GPT models. |
+| `CLAUDE_API_KEY` | *(none)* | Anthropic API key, for Claude models. |
+| `GEMINI_API_KEY` | *(none)* | Google AI API key, for Gemini models. |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL for self-hosted LLaMA models. |
 | `BACKGROUND_MODEL` | `gpt-5.6-luna` | Model for titles, summaries, memory extraction and Advanced RAG query analysis. |
 | `LLM_STREAM_IDLE_TIMEOUT_SECONDS` | `120` | How long a provider stream may stay silent before the tool loop fails the round. |
@@ -131,8 +131,8 @@ preferences.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PINECONE_API_KEY` | **Required** (may be empty) | Pinecone API key. |
-| `PINECONE_INDEX_NAME` | **Required** (may be empty) | Pinecone index for document embeddings. |
+| `PINECONE_API_KEY` | *(none)* | Pinecone API key. |
+| `PINECONE_INDEX_NAME` | *(none)* | Pinecone index for document embeddings. |
 | `WEAVIATE_HOST` | `localhost` | Weaviate host. |
 | `WEAVIATE_PORT` | `8080` | Weaviate HTTP port. |
 | `WEAVIATE_GRPC_PORT` | `50051` | Weaviate gRPC port. Searches use gRPC, so remap it whenever you remap the HTTP port. |
@@ -174,6 +174,7 @@ These are read from Django settings first, then the environment. Boolean flags t
 | `RAG_ENTITY_NER_ENABLED` | `true` | Run the GLiNER named-entity lane at ingest alongside the regex identifier lane. Identifiers still run when it is off. |
 | `RAG_ENTITY_MODEL` | `urchade/gliner_small-v2.1` | GLiNER checkpoint for the NER lane, loaded on first use. |
 | `RAG_ENTITY_HOPS_ENABLED` | `true` | With two or more files selected, follow a hit's rarest shared entity into one chunk of another selected file during the expand stage. |
+| `RAG_GRAPH_WALK_ENABLED` | `true` | Send questions the query analyzer routes to the graph through the Personalized PageRank walk, and add stored connections to the context. Off, they use the one-hop expand and no stored connections are added. |
 
 ## Email
 
@@ -241,6 +242,70 @@ Used for unified authentication, email links and inter-service calls.
 | `SOCRATIC_BOTS_BACKEND_URL` | *(none)* | Socratic Bots backend URL (optional). |
 | `DARE_INTERNAL_KEY` | `local-dev-internal-key` | Shared secret for partner backends calling internal endpoints. Replace it in production. |
 
+## Single sign-on (OpenID Connect)
+
+Users can sign in through the deployment's own identity provider (Entra ID, Okta, Keycloak
+or any OpenID Connect provider). It is on when `OIDC_SERVER_URL` and `OIDC_CLIENT_ID` are
+both set; the login page then shows a "Sign in with …" button beside the password form.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OIDC_SERVER_URL` | *(empty)* | The provider's issuer URL. DARE reads `/.well-known/openid-configuration` under it. |
+| `OIDC_CLIENT_ID` | *(empty)* | Client ID of the app registered for DARE. |
+| `OIDC_CLIENT_SECRET` | *(empty)* | That app's client secret. |
+| `OIDC_PROVIDER_ID` | `sso` | Short name used in the redirect URL. |
+| `OIDC_PROVIDER_NAME` | `SSO` | Label on the sign-in button. |
+| `OIDC_SCOPES` | `openid,profile,email` | Scopes requested. Okta needs `groups` added to send group membership. |
+| `OIDC_ALLOWED_EMAIL_DOMAINS` | *(any)* | Comma-separated email domains allowed to sign in. |
+| `OIDC_AUTO_CREATE_USERS` | `True` | Create a DARE account on a person's first sign-in. `False` admits only people who already have one. |
+| `OIDC_ACCESS_CODE` | *(none)* | Access code of the group new SSO users join, which sets their wallet credit and any group LiteLLM key. |
+| `OIDC_GROUPS_CLAIM` | `groups` | Claim that lists the user's groups. |
+| `OIDC_ROLE_MAP` | `{}` | JSON object from provider group to DARE role, e.g. `{"dare-admins":"SUPERADMIN","dare-staff":"USER"}`. |
+
+Register this redirect URL with the provider, as a confidential web application using the
+authorization code flow:
+
+```text
+<DARE_BACKEND_URL>/account/oidc/<OIDC_PROVIDER_ID>/login/callback/
+```
+
+`DARE_BACKEND_URL` and `DARE_FRONTEND_URL` must be set: the first decides whether the
+redirect URL is sent as `https`, the second is where the user lands after signing in.
+
+How accounts are matched and created:
+
+- A person is recognised by the provider's subject ID. On a first sign-in, an existing DARE
+  account with the same email is linked instead of duplicated.
+- The provider is trusted to assert email addresses, so register DARE as a single-tenant
+  app. A sign-in whose `email_verified` claim is `false`, or that has no email, is refused.
+- With `OIDC_ROLE_MAP` set, the role is recomputed on every sign-in: the highest role among
+  the user's mapped groups, or `USER` when none is mapped. Keys must match the claim's
+  values exactly (Entra ID sends group object IDs, not names). Leave it empty to manage
+  roles in DARE.
+- Groups are read from the ID token and the userinfo response.
+
+To try it locally, `devops/keycloak/city-test-realm.json` is a Keycloak realm with a `dare`
+client, three groups and five test users (`admin`, `supervisor`, `staff`, `existing` at
+`city.test`, and `outsider@other.test`). It holds no credentials: choose them when you
+start Keycloak.
+
+```bash
+docker run -d --name dare-keycloak -p 8081:8080 \
+  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=<admin password> \
+  -e KC_TEST_USER_PASSWORD=<password for the test users> \
+  -e KC_TEST_CLIENT_SECRET=<client secret> \
+  -v "$PWD/devops/keycloak:/opt/keycloak/data/import:ro" \
+  quay.io/keycloak/keycloak:26.8.2 start-dev --import-realm
+```
+
+```bash
+OIDC_PROVIDER_ID=city
+OIDC_SERVER_URL=http://localhost:8081/realms/city-test
+OIDC_CLIENT_ID=dare
+OIDC_CLIENT_SECRET=<the same client secret>
+OIDC_ROLE_MAP={"city-admins":"SUPERADMIN","city-supervisors":"SUPERVISOR"}
+```
+
 ## Research mode (Hermes)
 
 | Variable | Default | Description |
@@ -287,6 +352,11 @@ Used for unified authentication, email links and inter-service calls.
 ## SyftBox
 
 [SyftBox](https://syftbox.net) integration for federated data sharing.
+
+SyftBox is optional. It needs the private `syftbox-connect` package, which is not part of
+`requirements/prod.txt` or `local.txt`. With access to it, install it on top:
+`pip install -r requirements/prod.txt -r requirements/syftbox.txt`. Without it, DARE stores files
+locally, the `syftbox/` API is not mounted, and the variables below have no effect.
 
 | Variable | Default | Description |
 | --- | --- | --- |

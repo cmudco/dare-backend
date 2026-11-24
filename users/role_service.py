@@ -3,6 +3,7 @@ Role hierarchy service for managing platform roles.
 
 This module provides utilities for checking role permissions and hierarchy.
 """
+
 from users.constants import RoleChoice
 
 
@@ -88,3 +89,9 @@ def get_role_display(role: str) -> str:
         RoleChoice.USER: "User",
     }
     return role_displays.get(role, "Unknown")
+
+
+def role_for_groups(groups, role_map) -> str:
+    """The highest role the identity-provider groups map to, else USER."""
+    mapped = [role_map[group] for group in groups if group in role_map]
+    return max(mapped, key=get_role_level, default=RoleChoice.USER)

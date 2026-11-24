@@ -342,13 +342,13 @@ class OpenAIStreamProcessor:
         response,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
-        Process OpenAI Responses API stream (web search path).
+        Process OpenAI Responses API stream.
 
-        Extracts text content, function tool calls, and web search sources
-        (when enabled). Sources are included in the final usage frame under
-        'web_search_sources'; tool calls are emitted as the same
-        start/args/ready event trio the Chat Completions processor emits, so
-        the downstream tool loop stays provider-agnostic.
+        Text, thinking summaries and function tool calls are yielded as they
+        arrive. Tool calls use the same start/args/ready trio the Chat
+        Completions processor emits, so the downstream tool loop stays
+        provider-agnostic. Web search sources and sandbox runs ride on the
+        final usage frame.
 
         Args:
             response: OpenAI Responses API stream
@@ -360,66 +360,53 @@ class OpenAIStreamProcessor:
         sandbox_calls: List[Dict] = []
         sandbox_containers = set()
         wrote_text = False
+        thinking_gap = ""
 
         async for chunk in response:
-            if not hasattr(chunk, "type"):
+            kind = getattr(chunk, "type", None)
+            if kind is None:
                 continue
 
-            # Handle text delta events
-            if chunk.type == "response.output_text.delta":
-                if hasattr(chunk, "delta") and chunk.delta:
-                    wrote_text = True
-                    yield LLMStreamEvent.text_delta(chunk.delta)
+            web_search_extractor.process_chunk(chunk)
 
-            # A finished function call arrives as a completed output item with
-            # its arguments already fully accumulated, so the whole lifecycle
-            # collapses into one point. Emitting here rather than at
-            # response.completed also covers incomplete responses (e.g.
-            # max_output_tokens hit mid-turn), which never send that event.
-            if chunk.type == "response.output_item.done":
-                item = getattr(chunk, "item", None)
-                if item is not None and getattr(item, "type", None) == "function_call":
-                    # call_id is what a follow-up turn must echo back;
-                    # id identifies the output item itself.
-                    call_id = getattr(item, "call_id", None) or getattr(item, "id", "")
-                    name = getattr(item, "name", "") or ""
-                    arguments = getattr(item, "arguments", "") or ""
+            if kind == "response.output_text.delta" and chunk.delta:
+                wrote_text = True
+                yield LLMStreamEvent.text_delta(chunk.delta)
 
-                    yield LLMStreamEvent.tool_call_start(call_id, name)
-                    if arguments:
-                        yield LLMStreamEvent.tool_call_args_delta(
-                            call_id, arguments, len(arguments)
-                        )
-                    yield LLMStreamEvent.tool_call_ready(
-                        ToolCallRequest(id=call_id, name=name, arguments=arguments)
-                    )
-                elif item is not None and item.type == "code_interpreter_call":
+            elif kind == "response.reasoning_summary_text.delta" and chunk.delta:
+                yield LLMStreamEvent.thinking_delta(thinking_gap + chunk.delta)
+                thinking_gap = ""
+
+            elif kind == "response.reasoning_summary_part.done":
+                # Each summary part opens with its own heading.
+                thinking_gap = "\n\n"
+
+            # Emitting finished items here rather than at response.completed
+            # also covers incomplete responses (e.g. max_output_tokens hit
+            # mid-turn), which never send that event.
+            elif kind == "response.output_item.done":
+                item = chunk.item
+                if item.type == "function_call":
+                    for event in _function_call_events(item):
+                        yield event
+                elif item.type == "code_interpreter_call":
                     sandbox_containers.add(item.container_id)
                     sandbox_calls.append(_sandbox_tool_call(item))
 
-            # Extract web search sources from streaming events
-            web_search_extractor.process_chunk(chunk)
-
-            if chunk.type == "response.failed":
-                error = getattr(getattr(chunk, "response", None), "error", None)
+            elif kind in ("response.failed", "error"):
+                # A failed response carries the error; a bare error event is one.
+                error = chunk.response.error if kind == "response.failed" else chunk
                 message = getattr(error, "message", None) or "the provider failed"
                 yield LLMStreamEvent.text_delta(f"Error: {message}")
 
-            if chunk.type == "error":
-                message = getattr(chunk, "message", None) or "the provider failed"
-                yield LLMStreamEvent.text_delta(f"Error: {message}")
-
-            # Reasoning models can spend the whole output budget thinking and
-            # searching, ending incomplete with no answer at all.
-            if chunk.type == "response.incomplete":
+            elif kind in ("response.completed", "response.incomplete"):
+                # Reasoning models can spend the whole output budget thinking
+                # and searching, ending incomplete with no answer at all.
                 details = getattr(chunk.response, "incomplete_details", None)
                 if getattr(details, "reason", None) == "max_output_tokens":
                     yield _out_of_tokens_event(wrote_text)
 
-            if chunk.type in ("response.completed", "response.incomplete"):
                 usage = OpenAIUsageExtractor.extract_from_responses_api(chunk) or {}
-
-                # Include web search sources in usage data
                 sources = web_search_extractor.get_sources()
                 if sources:
                     usage["web_search_sources"] = sources
@@ -433,6 +420,30 @@ class OpenAIStreamProcessor:
                         usage["sandbox_citations"] = citations
 
                 yield LLMStreamEvent.usage_frame(usage)
+
+
+def _function_call_events(item) -> List[LLMStreamEvent]:
+    """
+    The start/args/ready trio for a finished Responses API function call.
+
+    The item arrives with its arguments fully accumulated, so the whole
+    lifecycle collapses into one point.
+    """
+    # call_id is what a follow-up turn must echo back; id names the output item.
+    call_id = item.call_id or item.id
+    arguments = item.arguments or ""
+
+    events = [LLMStreamEvent.tool_call_start(call_id, item.name)]
+    if arguments:
+        events.append(
+            LLMStreamEvent.tool_call_args_delta(call_id, arguments, len(arguments))
+        )
+    events.append(
+        LLMStreamEvent.tool_call_ready(
+            ToolCallRequest(id=call_id, name=item.name, arguments=arguments)
+        )
+    )
+    return events
 
 
 # Persisted sandbox output is for display, not replay; cap what a loop can print.
@@ -813,8 +824,11 @@ class GeminiStreamProcessor:
                         for part in candidate.content.parts or []:
                             # Handle text parts
                             if hasattr(part, "text") and part.text:
-                                wrote_text = True
-                                yield LLMStreamEvent.text_delta(part.text)
+                                if getattr(part, "thought", False):
+                                    yield LLMStreamEvent.thinking_delta(part.text)
+                                else:
+                                    wrote_text = True
+                                    yield LLMStreamEvent.text_delta(part.text)
 
                             # Handle function calls (Gemini's tool calling).
                             # Arguments travel only via TOOL_CALL_READY — a

@@ -51,6 +51,10 @@ from feature_flags.services import is_flag_enabled_for_user
 logger = logging.getLogger(__name__)
 
 
+class ProviderKeyMissing(ValueError):
+    """No platform key is configured for a provider, in Django admin or the environment."""
+
+
 # ===== System-key path (no user) =====
 
 
@@ -95,7 +99,7 @@ def get_provider_api_key_sync(provider: str) -> Optional[str]:
         return env_key
 
     # Step 3: No key found anywhere
-    raise ValueError(
+    raise ProviderKeyMissing(
         f"No API key found for provider '{provider}'. "
         f"Please add a key in Django admin (Provider API Keys) or set environment variable."
     )

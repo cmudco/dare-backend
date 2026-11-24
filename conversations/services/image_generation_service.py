@@ -1,7 +1,7 @@
 """
 Image Generation Service
 
-Handles saving of AI-generated images (e.g., from DALL-E) as File objects.
+Handles saving of AI-generated images as File objects.
 Supports both authenticated users and public/anonymous bot conversations.
 """
 
@@ -33,7 +33,7 @@ class ImageGenerationService:
         Args:
             image_bytes: The raw image bytes
             prompt: The original generation prompt
-            metadata: Dictionary containing generation metadata (model, size, quality, etc.)
+            metadata: Generation metadata (model, size, quality)
             user: User who requested the image (None for public bots)
             is_public: Whether this is for a public bot conversation
 
@@ -43,7 +43,7 @@ class ImageGenerationService:
         try:
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            prefix = "dalle_public" if is_public else "dalle_generated"
+            prefix = "generated_public" if is_public else "generated"
             filename = f"{prefix}_{timestamp}.png"
 
             storage_backend = StorageBackendChoice.LOCAL
@@ -61,13 +61,7 @@ class ImageGenerationService:
                 media_type='generated_image',
                 is_generated=True,
                 generation_prompt=prompt,
-                revised_prompt=metadata.get('revised_prompt', ''),
-                generation_params={
-                    'model': metadata.get('model', 'dall-e-3'),
-                    'size': metadata.get('size', '1024x1024'),
-                    'quality': metadata.get('quality', 'standard'),
-                    'style': metadata.get('style', 'vivid'),
-                },
+                generation_params=metadata,
                 storage_backend=storage_backend,
             )
 
@@ -101,9 +95,7 @@ class ImageGenerationService:
             Normalized metadata dictionary
         """
         return {
-            'model': generated_image_data.get('model', 'dall-e-3'),
-            'size': generated_image_data.get('size', '1024x1024'),
-            'quality': generated_image_data.get('quality', 'standard'),
-            'style': generated_image_data.get('style', 'vivid'),
-            'revised_prompt': generated_image_data.get('revised_prompt', ''),
+            'model': generated_image_data['model'],
+            'size': generated_image_data['size'],
+            'quality': generated_image_data['quality'],
         }

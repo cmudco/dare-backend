@@ -53,6 +53,7 @@ class RagMode(models.TextChoices):
     NAIVE = "naive", "Naive RAG"
     ADVANCED = "advanced", "Advanced RAG"
     AGENTIC = "agentic", "Agentic RAG"
+    GRAPH = "graph", "Graph RAG"
 
 
 class WebSocketMessageType(Enum):
@@ -136,7 +137,7 @@ DEFAULT_ANONYMOUS_USER_NAME = "Anonymous User"
 DEFAULT_CONVERSATION_TITLE = "New Chat"
 
 # Tool loop: maximum tool-execution rounds per turn. The call after the
-# final round runs with tools stripped, forcing a text answer.
+# final round may not call tools, forcing a text answer.
 MAX_TOOL_ROUNDS = 5
 
 # Default LLM configuration values
@@ -181,6 +182,7 @@ class ErrorCode:
     INSUFFICIENT_BALANCE = "insufficient_balance"
     SPEND_LIMIT_REACHED = "spend_limit_reached"
     BOT_MODEL_UNAVAILABLE = "bot_model_unavailable"
+    PROVIDER_NOT_CONFIGURED = "provider_not_configured"
 
     # Processing errors
     PROCESSING_ERROR = "processing_error"
@@ -214,6 +216,10 @@ class ErrorMessage:
 
     # Processing errors
     PROCESSING_ERROR = "Failed to process message"
+    PROVIDER_NOT_CONFIGURED = (
+        "This model's provider is not set up on this server. Choose another model, "
+        "or ask an administrator to add its API key."
+    )
     AI_RESPONSE_ERROR = "Failed to generate AI response"
     STREAM_ERROR = "Failed to stream AI response"
     REGENERATE_ERROR = "Failed to regenerate response"

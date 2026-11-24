@@ -67,7 +67,10 @@ from conversations.services.tool_loop_binding import ChatToolLoopBinding
 from conversations.services.tool_loop_service import ToolLoopResult, ToolLoopService
 from conversations.services.web_search_source_service import WebSearchSourceService
 from conversations.services.websocket_response_service import WebSocketResponseService
-from core.services.api_key_service import get_chat_dispatch_credentials
+from core.services.api_key_service import (
+    ProviderKeyMissing,
+    get_chat_dispatch_credentials,
+)
 from core.services.billing_service import BillingService
 from core.services.code_sandbox import sandbox_outputs, save_sandbox_file
 from core.services.conversation_service import ConversationService
@@ -77,11 +80,16 @@ from core.services.learning_progress_service import LearningProgressService
 from core.services.llm_service import LLMService
 from core.services.sb_client import SocraticBooksClient
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
+from feature_flags.constants import ENABLE_RAG
+from feature_flags.services import is_flag_enabled_for_user
 from memory.tasks import run_memory_writer
 from users.constants import AuthSourceChoice
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
+
+# Message fields that attach the user's documents to a turn.
+SOURCE_KEYS = ("file_ids", "embedding_ids", "tag_ids", "folder_ids", "library_ids")
 
 BOT_OWNER_ALLOWANCE_USED = _(
     "This bot's owner has used their AI gateway allowance. Ask them to raise it."
@@ -178,7 +186,7 @@ class MessageCoordinator:
         self, usage: Dict, message_data: Dict, message_obj: "Message"
     ) -> Optional[Dict]:
         """
-        Handle generated image from DALL-E: save file and build response data.
+        Handle a generated image: save file and build response data.
 
         Args:
             usage: Usage dict containing image_bytes and metadata
@@ -684,6 +692,22 @@ class MessageCoordinator:
             return None
         return ensemble
 
+    async def _drop_disabled_sources(self, message_data: Dict[str, Any]) -> None:
+        """Empty the turn's document sources when they are switched off.
+
+        The picker is hidden with the flag, but a conversation saved earlier
+        still replays its selection, so the turn runs without sources rather
+        than failing.
+        """
+        if not any(message_data.get(key) for key in SOURCE_KEYS):
+            return
+        if await database_sync_to_async(is_flag_enabled_for_user)(
+            self.user, ENABLE_RAG
+        ):
+            return
+        for key in SOURCE_KEYS:
+            message_data[key] = []
+
     def cancel_generation(self, message_id: Optional[int] = None) -> bool:
         """Cancel the in-flight AI turn; returns True when a cancel was issued."""
         if message_id is None:
@@ -752,6 +776,7 @@ class MessageCoordinator:
                 message_data.get("artifacts_enabled", False),
                 message_data.get("web_search_enabled", False),
             )
+            await self._drop_disabled_sources(message_data)
             # Build LLM query request using DTO builder
             # Note: mcp_server_ids are automatically extracted in the builder
             request = LLMQueryRequestBuilder.from_message_data(
@@ -1163,6 +1188,11 @@ class MessageCoordinator:
             )
         except BotModelUnavailable as error:
             await self.send_error(ErrorCode.BOT_MODEL_UNAVAILABLE, str(error))
+            return True
+        except ProviderKeyMissing:
+            await self.send_error(
+                ErrorCode.PROVIDER_NOT_CONFIGURED, ErrorMessage.PROVIDER_NOT_CONFIGURED
+            )
             return True
         except PaymentRequiredError as error:
             message = str(error)

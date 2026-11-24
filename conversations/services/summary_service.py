@@ -11,7 +11,7 @@ from core.services.background_model_service import BackgroundModelService
 
 logger = logging.getLogger(__name__)
 
-SUMMARY_MAX_TOKENS = 1024
+SUMMARY_MAX_TOKENS = 4000
 SUMMARY_TEMPERATURE = 0.5
 SUMMARY_SYSTEM_PROMPT = (
     "You are a helpful assistant. Summarize this conversation in concise "

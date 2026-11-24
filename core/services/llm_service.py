@@ -40,7 +40,13 @@ from core.services.llm_helpers import (  # Database helpers; Socratic message bu
     execute_audio_transcription,
     get_media_files_as_images,
 )
-from core.services.openai_service import OpenAIService
+from core.services.model_identity import supports_vision
+from core.services.openai_service import (
+    DEFAULT_IMAGE_MODEL,
+    GPT_IMAGE_QUALITIES,
+    GPT_IMAGE_SIZES,
+    OpenAIService,
+)
 from files.models import File, Folder
 
 logger = logging.getLogger(__name__)
@@ -119,7 +125,9 @@ class LLMService:
                         usage["memory_context"] = memory_context
                     yield chunk, usage
             elif request.requires_image_generation():
-                async for chunk, usage in self._execute_image_generation(request, llm):
+                async for chunk, usage in self._execute_image_generation(
+                    request, llm, all_images
+                ):
                     if usage and memory_context:
                         usage["memory_context"] = memory_context
                     yield chunk, usage
@@ -233,6 +241,7 @@ class LLMService:
         prepared: PreparedChat,
         messages: List[Dict],
         tools: Optional[List[Dict]],
+        allow_tool_calls: bool = True,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """Stream one model call of a tool loop as typed events.
 
@@ -240,7 +249,9 @@ class LLMService:
             prepared: The turn's PreparedChat.
             messages: Current message list (round 1 messages plus any
                 appended tool turns).
-            tools: Tools for this round — None on the forced final round.
+            tools: The turn's tools, the same on every round.
+            allow_tool_calls: False on the forced final round, which must
+                answer in text.
 
         Yields:
             LLMStreamEvent
@@ -252,6 +263,7 @@ class LLMService:
             effort=prepared.generation.effort,
             images=prepared.images,
             tools=tools,
+            allow_tool_calls=allow_tool_calls,
         ):
             yield event
 
@@ -323,7 +335,14 @@ class LLMService:
         if is_socratic:
             return await self._build_socratic_mode_messages(request)
         else:
-            return await self._build_standard_messages(request, code_sandbox)
+            # A gateway model has no catalog row, so its family name decides.
+            return await self._build_standard_messages(
+                request,
+                code_sandbox,
+                supports_vision=(
+                    llm.supports_vision if llm.pk else supports_vision(llm.identifier)
+                ),
+            )
 
     async def _build_socratic_mode_messages(
         self, request: LLMQueryRequest
@@ -351,6 +370,7 @@ class LLMService:
         self,
         request: LLMQueryRequest,
         code_sandbox: Optional[SandboxScope] = None,
+        supports_vision: bool = False,
     ) -> List[Dict[str, str]]:
         """Build messages for standard (non-Socratic) mode."""
         result = await build_standard_messages(
@@ -358,6 +378,7 @@ class LLMService:
             self.document_processor,
             self.file_processor,
             code_sandbox=code_sandbox,
+            supports_vision=supports_vision,
         )
         # Store memory context for inclusion in final usage data
         self._pending_memory_context = result.memory_context
@@ -391,13 +412,13 @@ class LLMService:
         return all_images
 
     async def _execute_image_generation(
-        self, request: LLMQueryRequest, llm: LLM
+        self, request: LLMQueryRequest, llm: LLM, images: List[Dict]
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Execute image generation request.
 
         Args:
             request: LLMQueryRequest with image generation settings
-            llm: LLM model (must be DALL-E)
+            llm: Selected LLM; a non-image model falls back to DEFAULT_IMAGE_MODEL
 
         Yields:
             Tuple of (chunk: str, usage: Dict)
@@ -409,18 +430,17 @@ class LLMService:
             litellm_model_ref=request.litellm_model_ref,
         )
 
-        # Extract DALL-E model from LLM identifier
-        model = (
-            llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
-        )
-
+        # A client still sending DALL-E era values gets the model's own choice.
         settings = request.generation.image_generation_settings or {}
         size = settings.get("size")
         quality = settings.get("quality")
-        style = settings.get("style")
 
         async for chunk, usage in ai_service.generate_image(
-            prompt=request.message, model=model, size=size, quality=quality, style=style
+            prompt=request.message,
+            model=llm.identifier if llm.is_image_generator else DEFAULT_IMAGE_MODEL,
+            size=size if size in GPT_IMAGE_SIZES else "auto",
+            quality=quality if quality in GPT_IMAGE_QUALITIES else "auto",
+            images=images,
         ):
             yield chunk, usage
 

@@ -1,7 +1,7 @@
 """Build an optional retrieval plan from a user's question."""
 
 import logging
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 from asgiref.sync import async_to_sync
 from pydantic import BaseModel
@@ -13,12 +13,18 @@ from users.models import User
 
 logger = logging.getLogger(__name__)
 
+# Reasoning models spend part of this before they write anything.
+ANALYSIS_MAX_TOKENS = 8000
+
 
 class QueryPlanResponse(BaseModel):
     intent: Literal["precise_lookup", "exploratory", "comparison"]
     keywords: list[str]
     rewritten_query: str
     hyde_passage: str
+    route: Literal["direct", "graph"]
+    query_entities: list[str]
+    asks_connection: bool
 
 
 _SYSTEM = (
@@ -28,8 +34,25 @@ _SYSTEM = (
     "contrasts); keywords (the exact tokens a keyword index should match — names, "
     "identifiers, numbers, places — no stopwords); rewritten_query (a cleaned, "
     "disambiguated restatement for semantic search); hyde_passage (one or two "
-    "sentences of a plausible answer, to embed instead of the bare question)."
+    "sentences of a plausible answer, to embed instead of the bare question); route "
+    "('graph' when answering needs connections across passages or documents: who "
+    "else, what else, what links two things, or following one fact to another; "
+    "'direct' when one passage can answer it); query_entities (every specific "
+    "person, organization, place, title, or concept the question names, as the "
+    "longest exact name: 'the Attack on Titan final season' is one entity, not two); "
+    "asks_connection (true only when the question asks how two or more named things "
+    "relate, connect, or what they have in common). When earlier turns of the "
+    "conversation are given, the query is a follow-up: work out who or what words "
+    "like 'them', 'he', 'those clients' or 'that file' refer to, and use those "
+    "names in rewritten_query, keywords and query_entities."
 )
+
+
+def _with_turns(query: str, recent_turns: Sequence[str]) -> str:
+    if not recent_turns:
+        return query
+    earlier = "\n".join(recent_turns)
+    return f"Earlier turns:\n{earlier}\n\nQuery: {query}"
 
 
 class QueryAnalyzer:
@@ -47,6 +70,7 @@ class QueryAnalyzer:
         query: str,
         payer_user_id: Optional[int] = None,
         payer_bot_id: Optional[int] = None,
+        recent_turns: Sequence[str] = (),
     ) -> Optional[QueryPlan]:
         self.last_error = None
         if not query:
@@ -64,11 +88,11 @@ class QueryAnalyzer:
                 user=user,
                 messages=[
                     {"role": "system", "content": _SYSTEM},
-                    {"role": "user", "content": query},
+                    {"role": "user", "content": _with_turns(query, recent_turns)},
                 ],
                 response_model=QueryPlanResponse,
                 description="Advanced RAG query analysis",
-                max_tokens=512,
+                max_tokens=ANALYSIS_MAX_TOKENS,
                 task=BackgroundTask.QUERY_ANALYSIS,
                 public_bot_id=payer_bot_id,
             )
@@ -78,6 +102,9 @@ class QueryAnalyzer:
                 keywords=tuple(data.keywords),
                 rewritten_query=data.rewritten_query,
                 hyde_passage=data.hyde_passage,
+                route=data.route,
+                query_entities=tuple(data.query_entities),
+                asks_connection=data.asks_connection,
             )
         except Exception as exc:  # never let analysis break retrieval
             logger.warning("Query analysis failed; using raw query: %s", exc)

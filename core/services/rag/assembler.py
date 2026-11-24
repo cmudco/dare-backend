@@ -87,7 +87,13 @@ class ContextAssembler:
             if chunk.via is not None:
                 source_file = chunk.via.source_file_id or chunk.file_id
                 source_tag = tags.get((source_file, chunk.via.source_chunk_index))
-                if chunk.via.kind == "entity":
+                if chunk.via.kind == "walk":
+                    # A walk that starts at an entity named in the question has
+                    # no source chunk to cite.
+                    header += self._walk_header(
+                        chunk.via, source_tag if chunk.via.source_file_id else None
+                    )
+                elif chunk.via.kind == "entity":
                     # An entity hop's source chunk may live in a file that
                     # was not cited (e.g. it fell out of budget); "chunk 38"
                     # from another document is not a usable pointer, so drop
@@ -106,6 +112,21 @@ class ContextAssembler:
                     )
                     header += f' · followed "{chunk.via.raw_text}" from {origin}'
         return f"{header}:\n{text}"
+
+    @staticmethod
+    def _walk_header(via, source_tag: Optional[int]) -> str:
+        parts = []
+        for step in via.path:
+            if step.kind != "entity":
+                continue
+            parts.append(
+                f"{step.label} ({step.relation.replace('_', ' ')})"
+                if step.relation
+                else step.label
+            )
+        linked = " -> ".join(parts)
+        origin = f" from [S{source_tag}]" if source_tag is not None else ""
+        return f' · linked through "{linked}"{origin}' if linked else ""
 
     @staticmethod
     def _location(chunk: RetrievedChunk) -> List[str]:

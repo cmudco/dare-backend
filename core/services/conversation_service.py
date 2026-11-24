@@ -21,6 +21,9 @@ from users.models import User
 
 logger = logging.getLogger(__name__)
 
+# Reasoning models spend part of this before they write the title.
+TITLE_MAX_TOKENS = 2000
+
 
 class ConversationService:
     """Handles conversation metadata and message management."""
@@ -99,10 +102,11 @@ class ConversationService:
                 allowed_user_ids = [conversation.user_id]
                 if conversation.file_owner_id:
                     allowed_user_ids.append(conversation.file_owner_id)
+                # Ids only: a full row carries the file's whole parsed document.
                 return list(
                     File.active_objects.filter(
                         pk__in=all_file_ids, user_id__in=allowed_user_ids
-                    )
+                    ).values_list("pk", flat=True)
                 )
 
             files = await database_sync_to_async(_get_accessible_files)()
@@ -182,7 +186,7 @@ class ConversationService:
                 user=user,
                 messages=messages,
                 description="Conversation title generation",
-                max_tokens=80,
+                max_tokens=TITLE_MAX_TOKENS,
                 task=BackgroundTask.TITLES,
                 public_bot_id=public_bot_id,
             )

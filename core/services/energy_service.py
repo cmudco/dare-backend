@@ -41,6 +41,7 @@ MODEL_STAND_INS = {
     "claude-opus-5-5": "claude-opus-4-8",
     "claude-fable-5": "claude-opus-4-8",
     "claude-fable-5-1": "claude-opus-4-8",
+    "claude-fable-5-2": "claude-opus-4-8",
     "claude-sonnet-5": "claude-sonnet-4-6",
     "claude-sonnet-5-5": "claude-sonnet-4-6",
     "claude-haiku-5-5": "claude-haiku-4-5",
@@ -48,6 +49,7 @@ MODEL_STAND_INS = {
     "gpt-6-sol": "gpt-5.4",
     "gpt-6-luna": "gpt-5.4-mini",
     "gpt-6.1-sol": "gpt-5.4",
+    "gpt-6.1-terra": "gpt-5.4-mini",
     "gpt-5.6-sol": "gpt-5.5",
     "gpt-5.6-terra": "gpt-5.4",
     "gpt-5.6-luna": "gpt-5.4-mini",
@@ -56,6 +58,8 @@ MODEL_STAND_INS = {
     "gemini-3.8-flash": "gemini-3.5-flash",
     "gemini-3.5-flash-lite": "gemini-3.1-flash-lite",
     "gemini-4-argon": "gemini-3.1-pro-preview",
+    "gemini-4-carbon": "gemini-3.1-pro-preview",
+    "gemini-4-hydrogen": "gemini-3.5-flash",
 }
 
 # Proxy identifiers wrap the vendor name: "gemini/gemini-3.6-flash",

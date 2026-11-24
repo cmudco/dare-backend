@@ -5,10 +5,12 @@ from django.test import SimpleTestCase
 from google.genai.types import FinishReason
 
 from core.services.dtos.stream_event_dto import StreamEventKind
-from core.services.llm_utils.stream_processors import (OUT_OF_TOKENS_NOTE,
-                                                       ClaudeStreamProcessor,
-                                                       GeminiStreamProcessor,
-                                                       OpenAIStreamProcessor)
+from core.services.llm_utils.stream_processors import (
+    OUT_OF_TOKENS_NOTE,
+    ClaudeStreamProcessor,
+    GeminiStreamProcessor,
+    OpenAIStreamProcessor,
+)
 
 
 def _stream(*chunks):
@@ -65,6 +67,16 @@ class ResponsesStreamEndingTests(SimpleTestCase):
         text, _ = _run(_ending("response.failed", error="server overloaded"))
 
         self.assertEqual(text, "Error: server overloaded")
+
+    def test_reasoning_summary_stays_out_of_the_answer(self):
+        text, _ = _run(
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta", delta="Weighing it"
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="Done"),
+        )
+
+        self.assertEqual(text, "Done")
 
 
 def _collect(processor, *chunks):
@@ -133,3 +145,24 @@ class OutOfTokensAcrossProvidersTests(SimpleTestCase):
         )
 
         self.assertEqual(text, OUT_OF_TOKENS_NOTE)
+
+    def test_gemini_thinking_stays_out_of_the_answer(self):
+        text = _collect(
+            GeminiStreamProcessor.process_stream,
+            SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(text="Weighing it", thought=True),
+                                SimpleNamespace(text="Done", thought=None),
+                            ]
+                        ),
+                    )
+                ],
+                usage_metadata=None,
+            ),
+        )
+
+        self.assertEqual(text, "Done")

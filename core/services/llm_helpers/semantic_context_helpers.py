@@ -6,7 +6,7 @@ to LLM message arrays via vector similarity search.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from asgiref.sync import sync_to_async
 
@@ -84,6 +84,7 @@ async def add_semantic_context_to_messages(
     rag_mode: str = RagMode.ADVANCED,
     message_obj: Optional[Any] = None,
     workflow_run_step_obj: Optional[Any] = None,
+    recent_turns: Sequence[str] = (),
 ) -> List[str]:
     """
     Add semantic search results to messages array.
@@ -153,7 +154,7 @@ async def add_semantic_context_to_messages(
         # (query analysis -> hybrid -> rerank -> grounding -> trace) — the same
         # treatment shared libraries get, for chat turns and workflow steps
         # alike. Naive mode keeps the plain hybrid search.
-        if rag_mode == RagMode.ADVANCED:
+        if rag_mode in (RagMode.ADVANCED, RagMode.GRAPH):
             blocks = await _search_documents_for_query(
                 document_processor,
                 query,
@@ -165,6 +166,8 @@ async def add_semantic_context_to_messages(
                 effective_threshold,
                 target,
                 failures,
+                recent_turns,
+                force_graph=rag_mode == RagMode.GRAPH,
             )
             context = "\n\n".join(blocks)
         else:
@@ -269,6 +272,8 @@ def run_document_search(
     max_context_snippets: int,
     similarity_threshold: float,
     target: Optional[Any],
+    recent_turns: Sequence[str] = (),
+    force_graph: bool = False,
 ) -> List[str]:
     """Advanced-mode document retrieval: the library pipeline, pointed at files.
 
@@ -289,6 +294,8 @@ def run_document_search(
         similarity_threshold=0.0,
         trace=True,
         citations=target.citations if target is not None else None,
+        recent_turns=tuple(recent_turns),
+        force_graph=force_graph,
     )
     pipeline = build_pipeline("document", document_processor.openai_client)
 
@@ -315,6 +322,8 @@ async def _search_documents_for_query(
     similarity_threshold: float,
     target: Optional[Any],
     failures: Optional[List[str]] = None,
+    recent_turns: Sequence[str] = (),
+    force_graph: bool = False,
 ) -> List[str]:
     """Async wrapper — document search touches the ORM and opens vector clients.
 
@@ -333,6 +342,8 @@ async def _search_documents_for_query(
             max_context_snippets,
             similarity_threshold,
             target,
+            recent_turns,
+            force_graph,
         )
     except Exception as exc:
         logger.exception("Document context retrieval failed: %s", exc)

@@ -51,6 +51,7 @@ from core.services.vector_service import get_vector_service
 from files.constants import DocumentProcessingMode
 from files.models import File, VectorIndexAttempt
 from files.services.document_map_service import DocumentMapService
+from knowledge_graph.services.ingest_hook import sync_clusters_after_ingest
 from workflows.models import WorkflowStepSnippet
 
 logger = logging.getLogger(__name__)
@@ -313,6 +314,9 @@ class DocumentProcessor:
                     lambda: self._retire_generation(
                         file, previous_key, file.user.id, previous_backend
                     )
+                )
+                transaction.on_commit(
+                    lambda: sync_clusters_after_ingest(file.user_id)
                 )
 
             if owns_journey:

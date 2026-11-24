@@ -53,9 +53,13 @@ async def prepare_regeneration_data(
     regeneration_message_data = message_data.copy()
     regeneration_message_data["message"] = preceding_user_message.message
 
-    # Image generator: re-run image generation with same prompt
-    if original_llm and original_llm.is_image_generator and llm == original_llm:
+    # Image generator: re-run with the same prompt and the images it edited
+    if llm and llm.is_image_generator:
         regeneration_message_data["image_generation_enabled"] = True
+        image_ids = await get_message_image_file_ids(preceding_user_message)
+        regeneration_message_data["media_ids"] = list(
+            dict.fromkeys((message_data.get("media_ids") or []) + image_ids)
+        )
 
     elif original_llm and original_llm.is_audio_transcriber and llm == original_llm:
         media_file_ids = message_data.get(

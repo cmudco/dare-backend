@@ -22,6 +22,7 @@ app_paths = [
     path('django-rq/', include('django_rq.urls')),
     path("", include("common.urls")),
     path("users/", include("users.urls"), name="users"),
+    path("account/oidc/", include("users.oidc_urls")),
     path("account/", include("allauth.account.urls")),
     path("", include("files.urls", namespace="files")),
     path("", include("conversations.urls", namespace="conversations")),
@@ -40,11 +41,16 @@ app_paths = [
     path("", include("research.urls", namespace="research")),
     path("", include("libraries.urls", namespace="libraries")),
     path("", include("projects.urls", namespace="projects")),
+    path("", include("knowledge_graph.urls", namespace="knowledge_graph")),
     path("", include("assistant.urls", namespace="assistant")),
     path("", include("release_notes.urls", namespace="release_notes")),
     path("", include("core.urls", namespace="core")),
-    path("syftbox/", include("syftbox.urls", namespace="syftbox")),
 ]
+
+if settings.SYFTBOX_INSTALLED:
+    app_paths.append(
+        path("syftbox/", include("syftbox.urls", namespace="syftbox"))
+    )
 
 api_docs_paths = [
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

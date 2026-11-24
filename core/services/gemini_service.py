@@ -41,6 +41,11 @@ class GeminiService:
     # This is required due to a bug in the Gemini package.
     TOKEN_BUFFER = 3000
 
+    # Gemini counts thinking against max_output_tokens. Thinking gets room of
+    # its own so Max Tokens stays the length of the answer.
+    THINKING_ALLOWANCE = {"low": 4000, "medium": 12000, "high": 24000}
+    OUTPUT_TOKEN_LIMIT = 65536
+
     def __init__(self, llm: LLM, api_key: Optional[str] = None):
         """
         Initialize Gemini service.
@@ -99,6 +104,7 @@ class GeminiService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None,
+        allow_tool_calls: bool = True,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from Google Gemini API.
@@ -122,7 +128,12 @@ class GeminiService:
 
             # Step 2: Create streaming response
             response_stream = await self._create_stream(
-                prepared_messages, max_tokens, temperature, tools, effort
+                prepared_messages,
+                max_tokens,
+                temperature,
+                tools,
+                effort,
+                allow_tool_calls,
             )
 
             # Step 3: Process and yield stream events
@@ -291,6 +302,7 @@ class GeminiService:
         temperature: float,
         tools: Optional[List[Dict]],
         effort: Optional[str] = None,
+        allow_tool_calls: bool = True,
     ):
         """
         Create Gemini streaming response using native async interface.
@@ -314,6 +326,12 @@ class GeminiService:
         config = self._build_generation_config(
             max_tokens, temperature, tools, system_instruction, effort
         )
+        if config.tool_config and not allow_tool_calls:
+            # Without its tools declared Gemini still emits a call for the
+            # ones it used earlier in the turn; NONE keeps them and forbids it.
+            config.tool_config.function_calling_config = types.FunctionCallingConfig(
+                mode="NONE"
+            )
 
         # Use native async interface for true real-time streaming
         return await self.async_client.models.generate_content_stream(
@@ -354,8 +372,15 @@ class GeminiService:
                 # Older clients can retain effort levels from other providers.
                 if thinking_level in {"xhigh", "max"}:
                     thinking_level = "high"
+                # Thought summaries show the reader that the model is working
+                # and keep the stream from looking stalled while it thinks.
                 config_kwargs["thinking_config"] = types.ThinkingConfig(
-                    thinking_level=thinking_level.upper()
+                    thinking_level=thinking_level.upper(), include_thoughts=True
+                )
+                config_kwargs["max_output_tokens"] = min(
+                    config_kwargs["max_output_tokens"]
+                    + self.THINKING_ALLOWANCE[thinking_level],
+                    self.OUTPUT_TOKEN_LIMIT,
                 )
         config = types.GenerateContentConfig(**config_kwargs)
 

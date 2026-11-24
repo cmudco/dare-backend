@@ -17,7 +17,7 @@ source .venv/bin/activate
 bash devops/install_document_runtime.sh
 
 echo "Installing dependencies..."
-pip install -r requirements/prod.txt
+pip install -r requirements/prod.txt -r requirements/syftbox.txt
 python devops/check_document_runtime.py
 
 echo "Applying database migrations..."

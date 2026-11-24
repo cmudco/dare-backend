@@ -122,11 +122,49 @@ def _persisted_snippets(message_obj: Any) -> List[Dict[str, Any]]:
     ]
 
 
+RECENT_TURNS_FOR_RETRIEVAL = 4
+RECENT_TURN_CHARS = 1200
+
+
+def _recent_turns(history: List[Dict[str, Any]]) -> List[str]:
+    """The last few spoken turns, short enough to ride along with query analysis."""
+    spoken = [
+        f"{turn['role']}: {turn['content'][:RECENT_TURN_CHARS]}"
+        for turn in history
+        if turn.get("role") in ("user", "assistant")
+        and isinstance(turn.get("content"), str)
+        and turn["content"].strip()
+    ]
+    return spoken[-RECENT_TURNS_FOR_RETRIEVAL:]
+
+
+def _history_for_model(
+    history: List[Dict[str, Any]], supports_vision: bool
+) -> List[Dict[str, Any]]:
+    """Drop empty turns and keep image attachments only for models that read them.
+
+    A turn that carries tool_calls stays even with empty text, and so does every
+    role:"tool" turn: providers reject a tool_call id without its result.
+    """
+    turns = []
+    for msg in history:
+        content = msg.get("content")
+        if isinstance(content, list) and not supports_vision:
+            texts = [part["text"] for part in content if part["type"] == "text"]
+            content = "\n".join([*texts, "[Image attached]"])
+            msg = {**msg, "content": content}
+        spoken = content.strip() if isinstance(content, str) else content
+        if msg.get("role") == "tool" or msg.get("tool_calls") or spoken:
+            turns.append(msg)
+    return turns
+
+
 async def build_standard_messages(
     request: LLMQueryRequest,
     document_processor: DocumentProcessor,
     file_processor: FileProcessor,
     code_sandbox: Optional[SandboxScope] = None,
+    supports_vision: bool = False,
 ) -> MessageBuildResult:
     """
     Build messages for standard (non-Socratic) mode.
@@ -222,6 +260,17 @@ async def build_standard_messages(
                     for item in file_contents
                 ]
 
+    # Fetched before retrieval so a follow-up's "them" can be resolved.
+    conversation_history = (
+        await get_conversation_history(
+            request.conversation,
+            limit=request.context.history_limit,
+            before=request.message_obj,
+        )
+        if request.conversation
+        else []
+    )
+
     # Add semantic context from vector search
     has_retrieval_sources = bool(
         request.context.embedding_ids
@@ -252,6 +301,7 @@ async def build_standard_messages(
             rag_mode=request.context.rag_mode,
             message_obj=request.message_obj,
             workflow_run_step_obj=request.workflow_run_step_obj,
+            recent_turns=_recent_turns(conversation_history),
         )
         if has_retrieval_sources:
             stage["mode"] = request.context.rag_mode
@@ -293,27 +343,7 @@ async def build_standard_messages(
 
     # Add conversation history
     with trace.stage("history") as stage:
-        conversation_history = (
-            await get_conversation_history(
-                request.conversation,
-                limit=request.context.history_limit,
-                before=request.message_obj,
-            )
-            if request.conversation
-            else []
-        )
-        # Keep turns that carry tool_calls even when their text content is empty —
-        # dropping them would orphan the role:"tool" results that follow. The same
-        # goes for role:"tool" turns themselves: every tool_call id MUST keep its
-        # result turn or providers reject the request, so they bypass the
-        # empty-content filter entirely.
-        history_messages = [
-            msg
-            for msg in conversation_history
-            if msg.get("role") == "tool"
-            or msg.get("tool_calls")
-            or (isinstance(msg.get("content"), str) and msg["content"].strip())
-        ]
+        history_messages = _history_for_model(conversation_history, supports_vision)
         messages.extend(history_messages)
         if history_messages:
             stage["turns"] = len(history_messages)

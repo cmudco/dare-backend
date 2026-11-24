@@ -26,7 +26,7 @@ def _binding(message_obj, send_callback):
 
 
 class _StalledLLMService:
-    async def stream_round(self, prepared, messages, tools):
+    async def stream_round(self, prepared, messages, tools, allow_tool_calls=True):
         await asyncio.sleep(1)
         if False:  # pragma: no cover - makes this an async generator
             yield None
@@ -54,7 +54,9 @@ class ToolLoopResilienceTests(SimpleTestCase):
                     context_trace=None,
                 )
 
-            async def stream_round(self, prepared, messages, tools):
+            async def stream_round(
+                self, prepared, messages, tools, allow_tool_calls=True
+            ):
                 self.calls.append(messages)
                 if len(self.calls) == 1:
                     yield LLMStreamEvent.usage_frame(
@@ -95,7 +97,9 @@ class ToolLoopResilienceTests(SimpleTestCase):
                     context_trace=None,
                 )
 
-            async def stream_round(self, prepared, messages, tools):
+            async def stream_round(
+                self, prepared, messages, tools, allow_tool_calls=True
+            ):
                 for text in ("Hello", " ", "world", "\n\n", "Done"):
                     yield LLMStreamEvent.text_delta(text)
 
@@ -126,7 +130,9 @@ class ToolLoopResilienceTests(SimpleTestCase):
                     context_trace=None,
                 )
 
-            async def stream_round(self, prepared, messages, tools):
+            async def stream_round(
+                self, prepared, messages, tools, allow_tool_calls=True
+            ):
                 yield LLMStreamEvent.text_delta("Partial answer the user saw")
                 yield LLMStreamEvent.usage_frame(
                     {"input_tokens": 11, "output_tokens": 7}
@@ -152,10 +158,10 @@ class ToolLoopResilienceTests(SimpleTestCase):
 
 
 class ToolLoopBudgetTests(SimpleTestCase):
-    async def test_call_budget_withdraws_tools_and_forces_an_answer(self):
+    async def test_call_budget_forbids_more_calls_and_forces_an_answer(self):
         class AlwaysSearchesLLMService:
             def __init__(self):
-                self.tools_per_round = []
+                self.rounds = []
 
             async def prepare_chat(self, request, messages=None):
                 return SimpleNamespace(
@@ -165,9 +171,11 @@ class ToolLoopBudgetTests(SimpleTestCase):
                     context_trace=None,
                 )
 
-            async def stream_round(self, prepared, messages, tools):
-                self.tools_per_round.append(tools is not None)
-                if tools is None:
+            async def stream_round(
+                self, prepared, messages, tools, allow_tool_calls=True
+            ):
+                self.rounds.append((tools, allow_tool_calls))
+                if not allow_tool_calls:
                     yield LLMStreamEvent.text_delta("Not in the docs.")
                     return
                 # Two parallel searches every round it is allowed to.
@@ -176,35 +184,66 @@ class ToolLoopBudgetTests(SimpleTestCase):
                         ToolCallRequest(id=f"c{index}", name="search", arguments="{}")
                     )
 
-        class CountingExecutor:
-            async def execute_round(self, calls, ctx, round_index):
-                return [
-                    ToolCallResult(
-                        tool_call_id=call.id,
-                        tool_name=call.name,
-                        origin="dare",
-                        server_slug="dare",
-                        content="nothing",
-                    )
-                    for call in calls
-                ]
-
         llm_service = AlwaysSearchesLLMService()
-        service = ToolLoopService(
-            llm_service, ToolLoopConfig(max_rounds=5, max_tool_calls=3)
+        result = await _run_budgeted(llm_service)
+
+        # Rounds 1-2 spend 4 calls (budget 3), so round 3 may not call. The
+        # tools themselves never leave the request.
+        tools = [{"type": "function"}]
+        self.assertEqual(
+            llm_service.rounds, [(tools, True), (tools, True), (tools, False)]
         )
-        service.execution_service = CountingExecutor()
-
-        async def send(payload):
-            pass
-
-        result = await service.run(
-            request=SimpleNamespace(),
-            binding=_binding(SimpleNamespace(id=8, created_at=timezone.now()), send),
-            retrieval_scope=None,
-        )
-
-        # Rounds 1-2 spend 4 calls (budget 3), so round 3 has no tools.
-        self.assertEqual(llm_service.tools_per_round, [True, True, False])
         self.assertEqual(result.tool_calls_made, 4)
         self.assertEqual(result.text, "Not in the docs.")
+
+    async def test_a_call_made_after_the_budget_is_spent_is_not_run(self):
+        class NeverStopsLLMService:
+            async def prepare_chat(self, request, messages=None):
+                return SimpleNamespace(
+                    messages=[{"role": "user", "content": "Find it"}],
+                    tools=[{"type": "function"}],
+                    memory_context=[],
+                    context_trace=None,
+                )
+
+            async def stream_round(
+                self, prepared, messages, tools, allow_tool_calls=True
+            ):
+                for index in range(2):
+                    yield LLMStreamEvent.tool_call_ready(
+                        ToolCallRequest(id=f"c{index}", name="search", arguments="{}")
+                    )
+
+        result = await _run_budgeted(NeverStopsLLMService())
+
+        self.assertEqual(result.tool_calls_made, 4)
+
+
+class _CountingExecutor:
+    async def execute_round(self, calls, ctx, round_index):
+        return [
+            ToolCallResult(
+                tool_call_id=call.id,
+                tool_name=call.name,
+                origin="dare",
+                server_slug="dare",
+                content="nothing",
+            )
+            for call in calls
+        ]
+
+
+async def _run_budgeted(llm_service):
+    service = ToolLoopService(
+        llm_service, ToolLoopConfig(max_rounds=5, max_tool_calls=3)
+    )
+    service.execution_service = _CountingExecutor()
+
+    async def send(payload):
+        pass
+
+    return await service.run(
+        request=SimpleNamespace(),
+        binding=_binding(SimpleNamespace(id=8, created_at=timezone.now()), send),
+        retrieval_scope=None,
+    )

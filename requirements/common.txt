@@ -88,7 +88,7 @@ pycryptodome==3.22.0
 weaviate-client==4.14.1
 
 # Local cross-encoder reranker (Track A). Imported lazily when advanced retrieval
-# runs; pulls in torch transitively (~CPU/MPS build).
+# runs; pulls in torch transitively. The Docker image installs the CPU build (see Dockerfile).
 sentence-transformers~=5.6.0
 
 # Pinned so the resolver can't move it while satisfying gliner, sentence-transformers
@@ -99,6 +99,9 @@ transformers==5.8.1
 # transformers stack the reranker already needs. sentencepiece and onnxruntime
 # below are its runtime dependencies.
 gliner==0.2.28
+# Personalized PageRank for the knowledge graph walk; pagerank needs scipy.
+networkx==3.6.1
+scipy==1.18.0
 sentencepiece==0.2.2
 onnxruntime==1.29.0
 
@@ -125,12 +128,3 @@ psycopg[binary]~=3.2.0
 
 # Energy/environmental impact tracking for LLM calls
 ecologits~=0.11.1
-
-# SyftBox (distributed file storage)
-syft-core
-syft-perm
-
-# Shared SyftBox integration: account linking, storage backend, sync.
-# Private repo — pip needs SSH access to cmudco. Pinned to a tag so a change
-# there cannot reach a project that never deployed.
-syftbox-connect[api] @ git+ssh://git@github-syftbox/cmudco/syftbox-connect.git@v0.1.2

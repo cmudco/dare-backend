@@ -7,6 +7,7 @@ class BackgroundTask(models.TextChoices):
     SUMMARIES = "summaries", _("Conversation summaries")
     MEMORY = "memory", _("Memory extraction")
     QUERY_ANALYSIS = "query_analysis", _("Retrieval query analysis")
+    GRAPH_RELATIONS = "graph_relations", _("Knowledge graph relationship types")
 
 
 class BackgroundModelSource(models.TextChoices):
