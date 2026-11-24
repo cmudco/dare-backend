@@ -240,7 +240,7 @@ class ClaudeService:
             },
         }
         self._apply_claude_sampling(params, temperature, effort)
-        self._move_output_config_to_extra_body(params)
+        self._move_untyped_fields_to_extra_body(params)
 
         if system_message:
             params["system"] = system_message
@@ -322,6 +322,7 @@ class ClaudeService:
         )
         if sandbox:
             await self._open_sandbox(call_params, sandbox)
+            self._move_untyped_fields_to_extra_body(call_params)
         if call_params.get("tools") and not allow_tool_calls:
             # Claude binds its earlier thinking to the tool list, so a round
             # that must answer in text keeps the tools and forbids calling them.
@@ -388,7 +389,7 @@ class ClaudeService:
             "stream": True,
         }
         self._apply_claude_sampling(params, temperature, effort)
-        self._move_output_config_to_extra_body(params)
+        self._move_untyped_fields_to_extra_body(params)
 
         # Add system message if present
         if system_message:
@@ -470,20 +471,19 @@ class ClaudeService:
             params["thinking"] = {"type": "adaptive", "display": "summarized"}
 
     @staticmethod
-    def _move_output_config_to_extra_body(params: Dict) -> None:
+    def _move_untyped_fields_to_extra_body(params: Dict) -> None:
         """
         Send newer Anthropic fields before the installed SDK exposes typed args.
 
         The local anthropic SDK accepts ``thinking`` directly, but not
-        ``output_config`` yet. Passing it through ``extra_body`` preserves the
-        wire payload without tripping client-side argument validation.
+        ``output_config`` or ``container`` yet. Passing them through
+        ``extra_body`` preserves the wire payload without tripping client-side
+        argument validation.
         """
-        output_config = params.pop("output_config", None)
-        if not output_config:
-            return
-
-        extra_body = params.setdefault("extra_body", {})
-        extra_body["output_config"] = output_config
+        for field in ("output_config", "container"):
+            value = params.pop(field, None)
+            if value:
+                params.setdefault("extra_body", {})[field] = value
 
     def _convert_tools_to_claude_format(self, tools: List[Dict]) -> List[Dict]:
         """
