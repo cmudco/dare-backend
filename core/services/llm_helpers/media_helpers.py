@@ -68,8 +68,8 @@ async def execute_audio_transcription(
     """
     Execute audio transcription request with streaming support.
 
-    For large files that get split into chunks, this yields each chunk's
-    transcription as it completes, allowing real-time progress updates.
+    Like every other reply, chunks are new text only: the caller appends them.
+    Large files split into parts stream each part as it completes.
 
     Args:
         media_ids: List of media file IDs to transcribe
@@ -92,8 +92,8 @@ async def execute_audio_transcription(
     language = None if language == "auto" else language
     enable_streaming = settings.get("stream_chunks", True)
 
-    accumulated_text = ""
     final_transcription = None
+    streamed = False
 
     for media_file in media_files:
         try:
@@ -104,12 +104,14 @@ async def execute_audio_transcription(
                     if chunk_result.get("error"):
                         yield chunk_result["error_message"], None
                         return
-
-                    accumulated_text = chunk_result["accumulated_text"]
-                    yield accumulated_text, None
-
                     if chunk_result.get("final_transcription"):
                         final_transcription = chunk_result["final_transcription"]
+                        continue
+                    text = chunk_result["text"]
+                    if streamed and chunk_result["first"]:
+                        text = "\n\n" + text
+                    streamed = True
+                    yield text, None
             else:
                 final_transcription = (
                     await AudioTranscriptionService.transcribe_audio_file(
@@ -123,12 +125,17 @@ async def execute_audio_transcription(
             return
 
     if final_transcription:
-        result_text = AudioTranscriptionService.format_transcription_for_display(
-            final_transcription
-        )
         usage_data = final_transcription.copy()
         usage_data["transcription_result"] = final_transcription
-        yield result_text, usage_data
+        if streamed:
+            yield "", usage_data
+        else:
+            yield (
+                AudioTranscriptionService.format_transcription_for_display(
+                    final_transcription
+                ),
+                usage_data,
+            )
     else:
         file_names = (
             ", ".join([f.name for f in media_files]) if media_files else "unknown"
@@ -145,14 +152,12 @@ async def _transcribe_file_streaming(
     Stream transcription chunks for a single file.
 
     Yields dicts with:
-    - accumulated_text: Progressive transcription text
-    - error: True if error occurred
-    - error_message: Error details (if error)
-    - final_transcription: Complete transcription dict (on last chunk)
+    - text, first: the new text for one part; ``first`` marks the file's first part
+    - error, error_message: when transcription fails
+    - final_transcription: the complete result, after the last part
     """
     file_name = media_file.name
     chunk_texts = []
-    accumulated_text = ""
 
     async for chunk_data in AudioTranscriptionService.transcribe_audio_file_streaming(
         file_obj=media_file, language=language, model=model
@@ -168,17 +173,18 @@ async def _transcribe_file_streaming(
 
         chunk_text = chunk_data["text"]
         chunk_texts.append(chunk_text)
-
-        if chunk_data["chunk_index"] == 0:
-            accumulated_text = f"**Transcription of `{file_name}`**\n\n{chunk_text}"
-        else:
-            accumulated_text += " " + chunk_text
-
-        yield {"accumulated_text": accumulated_text}
+        first = chunk_data["chunk_index"] == 0
+        yield {
+            "text": (
+                f"**Transcription of `{file_name}`**\n\n{chunk_text}"
+                if first
+                else " " + chunk_text
+            ),
+            "first": first,
+        }
 
     if chunk_texts:
         yield {
-            "accumulated_text": accumulated_text,
             "final_transcription": {
                 "text": " ".join(chunk_texts),
                 "language": language or "auto",
