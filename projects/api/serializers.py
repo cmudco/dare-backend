@@ -201,7 +201,9 @@ class SourceSizeRequestSerializer(serializers.Serializer):
     folder_ids = serializers.PrimaryKeyRelatedField(
         many=True, required=False, default=list, queryset=Folder.objects.none()
     )
-    model_ref = serializers.CharField(required=False, allow_blank=True, default="")
+    model_ref = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, default=None
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -593,7 +593,7 @@ class ProjectSourceModeTests(ProjectTestCase):
 
         response = self.client.post(
             f"{PROJECTS_URL}source-size/",
-            {"file_ids": [shared.id], "folder_ids": [folder.id]},
+            {"file_ids": [shared.id], "folder_ids": [folder.id], "model_ref": None},
             format="json",
         )
 
