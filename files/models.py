@@ -246,6 +246,15 @@ class File(BaseModel):
         verbose_name=_("Token Count"),
         help_text=_("Tokens in the extracted text; empty until the file is parsed."),
     )
+    provider_token_counts = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name=_("Provider Token Counts"),
+        help_text=_(
+            "The extracted text counted by providers' token-count APIs, keyed by "
+            "'<provider>:<model>'. Cleared when the text changes."
+        ),
+    )
     page_count = models.PositiveIntegerField(
         blank=True,
         null=True,
@@ -294,6 +303,7 @@ class File(BaseModel):
         """Store the extracted text and its token count together."""
         self.extracted_text = text
         self.token_count = None if text is None else count_tokens(text)
+        self.provider_token_counts = {}
 
     class Meta:
         indexes = [
