@@ -542,6 +542,19 @@ class ProjectSourceModeTests(ProjectTestCase):
         self.assertEqual(conversation.selected_embedding_ids, [file.id])
         self.assertEqual(conversation.selected_file_ids, [])
 
+    def test_full_files_falls_back_to_search_once_folders_grow_too_large(self):
+        folder = Folder.objects.create(user=self.user, name="Archive")
+        folder.files.add(self.make_file(self.user, "small.pdf", text="small"))
+        project = self.make_project(source_mode=ProjectSourceMode.FULL)
+        project.folders.add(folder)
+        grown = self.make_file(self.user, "huge.pdf", text=TOO_LARGE_TEXT)
+        folder.files.add(grown)
+
+        conversation = self.start_chat(project)
+
+        self.assertEqual(conversation.selected_file_ids, [])
+        self.assertIn(grown.id, conversation.selected_embedding_ids)
+
     def test_full_files_mode_is_rejected_for_sources_over_the_limit(self):
         project = self.make_project()
         huge = self.make_file(self.user, "huge.pdf", text=TOO_LARGE_TEXT)

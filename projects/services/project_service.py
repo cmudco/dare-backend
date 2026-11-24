@@ -12,6 +12,7 @@ from conversations.constants import DEFAULT_FULL_FILES_TOKEN_BUDGET
 from conversations.models import LLM, Conversation
 from core.services.model_ref import model_ref
 from files.models import File
+from files.services.source_size import estimate_source_size
 from libraries.models import UserLibraryAccess
 from projects.constants import ProjectMemoryScope, ProjectSourceMode
 from projects.models import PersonalProject
@@ -96,6 +97,15 @@ def resolve_chat_sources(project: PersonalProject) -> ProjectChatSources:
     return ProjectChatSources(file_ids=file_ids, library_ids=library_ids)
 
 
+def chat_reads_full_files(project: PersonalProject, file_ids: Tuple[int, ...]) -> bool:
+    """Full files only while they fit; folders that grew past the limit search."""
+    if project.source_mode != ProjectSourceMode.FULL or not file_ids:
+        return False
+    files = _document_files(project.user).filter(id__in=file_ids)
+    budget = full_files_token_budget(project.default_model)
+    return estimate_source_size(files).fits(budget)
+
+
 def start_chat_in_project(conversation: Conversation) -> None:
     """Copy the project's defaults onto a freshly created chat.
 
@@ -103,7 +113,7 @@ def start_chat_in_project(conversation: Conversation) -> None:
     """
     project = conversation.project
     sources = resolve_chat_sources(project)
-    if project.source_mode == ProjectSourceMode.FULL:
+    if chat_reads_full_files(project, sources.file_ids):
         conversation.selected_file_ids = list(sources.file_ids)
         conversation.selected_embedding_ids = []
     else:
