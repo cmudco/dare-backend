@@ -1,11 +1,9 @@
 import asyncio
 import json
-from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 from asgiref.sync import sync_to_async
 from django.test import TransactionTestCase, override_settings
-from django.utils import timezone
 
 from conversations.constants import SenderType
 from conversations.models import Conversation, Message
@@ -36,16 +34,12 @@ class GenerationResumeTests(TransactionTestCase):
         )
         self.reply = self._reply("")
 
-    def _reply(self, text, age=timedelta(0)):
-        reply = Message.active_objects.create(
+    def _reply(self, text):
+        return Message.active_objects.create(
             conversation=self.conversation,
             sender_type=SenderType.AI_ASSISTANT,
             message=text,
         )
-        Message._base_manager.filter(pk=reply.pk).update(
-            created_at=timezone.now() - age
-        )
-        return reply
 
     def _coordinator(self):
         return MessageCoordinator(
@@ -101,8 +95,9 @@ class GenerationResumeTests(TransactionTestCase):
         self.assertFalse(await generation_registry.stop_requested(self.reply.id))
 
     async def test_an_empty_reply_whose_turn_died_is_saved_as_interrupted(self):
-        dead = await sync_to_async(self._reply)("", age=timedelta(minutes=5))
-        answered = await sync_to_async(self._reply)("Done.", age=timedelta(minutes=5))
+        dead = await sync_to_async(self._reply)("")
+        answered = await sync_to_async(self._reply)("Done.")
+        await generation_registry.mark_live(self.reply.id, self.conversation.id)
         coordinator = self._coordinator()
 
         await coordinator.sync_generations()
@@ -115,7 +110,6 @@ class GenerationResumeTests(TransactionTestCase):
         )
         self.assertEqual(rows[dead.pk], INTERRUPTED_REPLY)
         self.assertEqual(rows[answered.pk], "Done.")
-        # Too young to judge: its first heartbeat may not have landed yet.
         self.assertEqual(rows[self.reply.pk], "")
         pushed = [m for m in self._sent(coordinator) if m.get("id") == dead.pk]
         self.assertEqual(len(pushed), 1)

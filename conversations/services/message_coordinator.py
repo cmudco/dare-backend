@@ -457,6 +457,9 @@ class MessageCoordinator:
                 sender=DEFAULT_AI_SENDER_NAME,
                 descriptor=descriptor,
             )
+            # Live from the moment it exists, so an empty reply with no live
+            # key always means its turn died.
+            await generation_registry.mark_live(ai_message.id, self.conversation.id)
 
             # Send empty AI message with streaming=True to show placeholder on frontend
             placeholder_payload = await WebSocketResponseService.format_message(
@@ -780,13 +783,10 @@ class MessageCoordinator:
         live = await generation_registry.live_ids(
             self.conversation.id, [reply.id for reply in replies]
         )
-        now = timezone.now()
         for reply in replies:
             if reply.id in live:
                 await self.send({"type": "generation_active", "messageId": reply.id})
-            elif generation_registry.is_interrupted(
-                reply.message, reply.has_files, reply.created_at, now
-            ):
+            elif generation_registry.is_interrupted(reply.message, reply.has_files):
                 await self._mark_interrupted(reply)
 
     @database_sync_to_async

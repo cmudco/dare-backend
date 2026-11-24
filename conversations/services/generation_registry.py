@@ -7,7 +7,6 @@ ended or died with its worker. Stop requests travel the same way: any
 worker can set a stop key, and the owning worker's heartbeat acts on it.
 """
 
-from datetime import datetime, timedelta
 from typing import Iterable, Set
 
 from asgiref.sync import sync_to_async
@@ -16,10 +15,6 @@ from django.core.cache import cache
 HEARTBEAT_SECONDS = 0.5
 LIVE_TTL_SECONDS = 5
 STOP_TTL_SECONDS = 60
-# An empty reply younger than this may belong to a turn whose first
-# heartbeat has not landed yet. A live turn judged dead by mistake still
-# overwrites the notice when it finalizes.
-INTERRUPTED_AFTER = timedelta(seconds=10)
 
 
 def _live_key(message_id: int) -> str:
@@ -66,11 +61,6 @@ async def stop_requested(message_id: int) -> bool:
     return bool(await _cache_get(_stop_key(message_id)))
 
 
-def is_interrupted(
-    text: str,
-    has_files: bool,
-    created_at: datetime,
-    now: datetime,
-) -> bool:
+def is_interrupted(text: str, has_files: bool) -> bool:
     """A reply with no running turn that never got content: its turn died."""
-    return not text.strip() and not has_files and now - created_at >= INTERRUPTED_AFTER
+    return not text.strip() and not has_files
