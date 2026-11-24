@@ -68,8 +68,8 @@ class Migration(migrations.Migration):
             field=models.PositiveIntegerField(
                 default=200000,
                 help_text=(
-                    "Largest prompt the model accepts, in tokens. Files picked for "
-                    "reading in full are sent whole while they fit in half of it."
+                    "Largest prompt the model accepts, in tokens. Picked files fit "
+                    "for reading in full while they use at most half of it."
                 ),
             ),
         ),

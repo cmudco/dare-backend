@@ -147,8 +147,8 @@ DEFAULT_MAX_CONTEXT_SNIPPETS = 4
 DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD = 0.5
 DEFAULT_HISTORY_LIMIT = 20
 
-# Files picked for reading in full are sent whole only while they fit in half
-# the model's input window, leaving the rest for history and the reply.
+# Files read in full fit while they use at most half the model's input window,
+# leaving the rest for history and the reply.
 DEFAULT_MAX_INPUT_TOKENS = 200_000
 DEFAULT_FULL_FILES_TOKEN_BUDGET = DEFAULT_MAX_INPUT_TOKENS // 2
 
