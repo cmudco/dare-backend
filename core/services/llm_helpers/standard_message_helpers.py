@@ -254,7 +254,11 @@ async def build_standard_messages(
             if file_contents:
                 read_file_names = [item["name"] for item in file_contents]
                 stage["files"] = [
-                    {"name": item["name"], "chars": len(item["content"])}
+                    {
+                        "id": item["id"],
+                        "name": item["name"],
+                        "chars": len(item["content"]),
+                    }
                     for item in file_contents
                 ]
 

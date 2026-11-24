@@ -207,7 +207,7 @@ def get_full_file_contents(file_ids: list, file_processor) -> list:
         file_processor: FileProcessor instance for reading file content
 
     Returns:
-        List of ``{"name", "content"}`` dicts, where ``content`` is the
+        List of ``{"id", "name", "content"}`` dicts, where ``content`` is the
         formatted block to inject into the prompt
     """
     if not file_ids:
@@ -220,7 +220,11 @@ def get_full_file_contents(file_ids: list, file_processor) -> list:
             content = file_processor.read_file_content(file)
             file_name = file.name or file.file.name
             file_contents.append(
-                {"name": file_name, "content": f"File: {file_name}\n\n{content}"}
+                {
+                    "id": file.id,
+                    "name": file_name,
+                    "content": f"File: {file_name}\n\n{content}",
+                }
             )
         except Exception:
             continue
