@@ -80,7 +80,7 @@ docs(agents): cut AGENTS.md to commands and real traps
 ## Using AI coding agents
 
 `AGENTS.md` holds the commands and traps, and `.claude/CLAUDE.md` imports it for Claude Code.
-Procedures (`run-backend`, `run-workers`, `check`, `release-note`) live in `.agents/skills/`, with
+Procedures (`run-backend`, `run-workers`, `check`, `release-note`, `verify`) live in `.agents/skills/`, with
 symlinks in `.claude/skills/`; [.agents/README.md](../.agents/README.md) explains the layout. Treat
 these files like code: if you change how the backend runs, builds or tests, update the matching
 skill in the same PR.
