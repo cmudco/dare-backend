@@ -87,6 +87,12 @@ class LLM(models.Model):
         default=ModelEffort.HIGH,
         help_text="Default effort level when the conversation has no explicit effort override.",
     )
+    max_effort = models.CharField(
+        max_length=20,
+        choices=ModelEffort.choices,
+        default=ModelEffort.MAX,
+        help_text="Highest effort level this model accepts. Higher requests are lowered to it.",
+    )
     default_adaptive_thinking_enabled = models.BooleanField(
         default=False,
         help_text="Whether adaptive thinking should be sent by default for this model.",

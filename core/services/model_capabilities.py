@@ -6,7 +6,8 @@ from typing import Any, Optional
 from conversations.constants import ModelEffort
 from core.services.model_identity import ModelFamily, resolve_family
 
-EFFORT_VALUES = {choice.value for choice in ModelEffort}
+EFFORT_ORDER = [choice.value for choice in ModelEffort]
+EFFORT_VALUES = set(EFFORT_ORDER)
 
 
 def family_supports_temperature(
@@ -26,6 +27,7 @@ class ModelCapabilities:
     supports_effort: bool = False
     supports_adaptive_thinking: bool = False
     default_effort: str = ModelEffort.HIGH.value
+    max_effort: str = ModelEffort.MAX.value
     default_adaptive_thinking_enabled: bool = False
 
     @classmethod
@@ -57,6 +59,9 @@ class ModelCapabilities:
             default_effort=normalize_effort(
                 getattr(llm, "default_effort", None), ModelEffort.HIGH.value
             ),
+            max_effort=normalize_effort(
+                getattr(llm, "max_effort", None), ModelEffort.MAX.value
+            ),
             default_adaptive_thinking_enabled=bool(
                 getattr(llm, "default_adaptive_thinking_enabled", False)
             ),
@@ -66,7 +71,8 @@ class ModelCapabilities:
         """Return the effort to send for this model, if effort is supported."""
         if not self.supports_effort:
             return None
-        return normalize_effort(requested_effort, self.default_effort)
+        effort = normalize_effort(requested_effort, self.default_effort)
+        return min(effort, self.max_effort, key=EFFORT_ORDER.index)
 
 
 def normalize_effort(value: Optional[str], default: str) -> str:

@@ -51,6 +51,7 @@ class LLMSerializer(serializers.ModelSerializer):
             "supports_effort",
             "supports_adaptive_thinking",
             "default_effort",
+            "max_effort",
             "default_adaptive_thinking_enabled",
             "is_image_generator",
             "is_audio_transcriber",

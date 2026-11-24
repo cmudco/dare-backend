@@ -43,7 +43,7 @@ class GeminiService:
 
     # Gemini counts thinking against max_output_tokens. Thinking gets room of
     # its own so Max Tokens stays the length of the answer.
-    THINKING_ALLOWANCE = {"low": 4000, "medium": 12000, "high": 24000}
+    THINKING_ALLOWANCE = {"low": 4000, "medium": 12000, "high": 24000, "xhigh": 32000}
     OUTPUT_TOKEN_LIMIT = 65536
 
     def __init__(self, llm: LLM, api_key: Optional[str] = None):
@@ -369,9 +369,6 @@ class GeminiService:
         if not self.model_identifier.startswith(("gemini-1", "gemini-2")):
             thinking_level = self.capabilities.resolve_effort(effort)
             if thinking_level is not None:
-                # Older clients can retain effort levels from other providers.
-                if thinking_level in {"xhigh", "max"}:
-                    thinking_level = "high"
                 # Thought summaries show the reader that the model is working
                 # and keep the stream from looking stalled while it thinks.
                 config_kwargs["thinking_config"] = types.ThinkingConfig(

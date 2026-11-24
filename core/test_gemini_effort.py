@@ -7,13 +7,16 @@ from core.services.gemini_service import GeminiService
 
 
 class GeminiEffortTests(SimpleTestCase):
-    def service(self, identifier="gemini-3.8-flash", supports_effort=True):
+    def service(
+        self, identifier="gemini-3.8-flash", supports_effort=True, max_effort="high"
+    ):
         return GeminiService(
             SimpleNamespace(
                 identifier=identifier,
                 is_reasoning=True,
                 supports_effort=supports_effort,
                 default_effort="medium",
+                max_effort=max_effort,
                 supports_temperature=True,
             ),
             api_key="test-key",
@@ -32,6 +35,19 @@ class GeminiEffortTests(SimpleTestCase):
             ("high", "HIGH"),
             ("xhigh", "HIGH"),
             ("max", "HIGH"),
+        ]:
+            with self.subTest(effort=requested):
+                config = service._build_generation_config(
+                    100, 0.7, None, effort=requested
+                )
+                self.assertEqual(config.thinking_config.thinking_level, expected)
+
+    def test_xhigh_reaches_google_for_models_that_accept_it(self):
+        service = self.service("gemini-4-neon", max_effort="xhigh")
+        for requested, expected in [
+            ("high", "HIGH"),
+            ("xhigh", "XHIGH"),
+            ("max", "XHIGH"),
         ]:
             with self.subTest(effort=requested):
                 config = service._build_generation_config(
