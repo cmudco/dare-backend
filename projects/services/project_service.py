@@ -11,8 +11,8 @@ from django.utils import timezone
 from conversations.constants import DEFAULT_FULL_FILES_TOKEN_BUDGET
 from conversations.models import LLM, Conversation
 from core.services.model_ref import model_ref
+from core.services.token_counting import measure_files
 from files.models import File
-from files.services.source_size import estimate_source_size
 from libraries.models import UserLibraryAccess
 from projects.constants import ProjectMemoryScope, ProjectSourceMode
 from projects.models import PersonalProject
@@ -103,7 +103,7 @@ def chat_reads_full_files(project: PersonalProject, file_ids: Tuple[int, ...]) -
         return False
     files = _document_files(project.user).filter(id__in=file_ids)
     budget = full_files_token_budget(project.default_model)
-    return estimate_source_size(files).fits(budget)
+    return measure_files(files, project.default_model).fits(budget)
 
 
 def start_chat_in_project(conversation: Conversation) -> None:

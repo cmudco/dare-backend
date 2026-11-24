@@ -2,9 +2,10 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from core.services.model_ref import ModelRefUnavailable, resolve_model_ref
+from core.services.token_counting import measure_files
 from files.models import File, Folder
+from files.services.source_size import SourceSize
 from libraries.models import SharedLibrary, UserLibraryAccess
-from files.services.source_size import SourceSize, estimate_source_size
 from projects.constants import (
     PROJECT_DESCRIPTION_MAX_LENGTH,
     PROJECT_INSTRUCTIONS_MAX_LENGTH,
@@ -155,17 +156,18 @@ class PersonalProjectSerializer(serializers.ModelSerializer):
         project = self.instance
         files = attrs.get("files", project.files.all() if project else [])
         folders = attrs.get("folders", project.folders.all() if project else [])
-        size = estimate_source_size(
-            selected_source_files(
-                self.context["request"].user,
-                [file.pk for file in files],
-                [folder.pk for folder in folders],
-            )
-        )
         llm = (
             attrs["default_model"]
             if "default_model" in attrs
             else (project.default_model if project else None)
+        )
+        size = measure_files(
+            selected_source_files(
+                self.context["request"].user,
+                [file.pk for file in files],
+                [folder.pk for folder in folders],
+            ),
+            llm,
         )
         token_budget = full_files_token_budget(llm)
         if not size.fits(token_budget):
@@ -227,3 +229,4 @@ class SourceSizeSerializer(serializers.Serializer):
     estimated_tokens = serializers.IntegerField()
     token_limit = serializers.IntegerField()
     fits_full_files = serializers.BooleanField()
+    estimated = serializers.BooleanField()

@@ -187,6 +187,7 @@ class DocumentParsingService:
             update_fields=[
                 "extracted_text",
                 "token_count",
+                "provider_token_counts",
                 "document_model",
                 "page_count",
                 "pages_without_text",

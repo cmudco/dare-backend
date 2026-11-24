@@ -39,5 +39,15 @@ class Migration(migrations.Migration):
                 verbose_name="Token Count",
             ),
         ),
+        migrations.AddField(
+            model_name="file",
+            name="provider_token_counts",
+            field=models.JSONField(
+                blank=True,
+                default=dict,
+                help_text="The extracted text counted by providers' token-count APIs, keyed by '<provider>:<model>'. Cleared when the text changes.",
+                verbose_name="Provider Token Counts",
+            ),
+        ),
         migrations.RunPython(backfill, migrations.RunPython.noop),
     ]
