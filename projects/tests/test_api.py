@@ -6,12 +6,13 @@ from rest_framework.test import APIClient
 
 from billing.constants import LiteLLMKeySourceChoice
 from billing.models import LiteLLMKey
+from conversations.constants import DEFAULT_MAX_INPUT_TOKENS
 from conversations.models import LLM, Conversation
+from core.services.token_counting import count_tokens
 from files.models import File, Folder
 from libraries.models import SharedLibrary, UserLibraryAccess
 from memory.models import MemoryRecord
 from memory.services.store import shortlist
-from conversations.constants import DEFAULT_FULL_FILES_TOKEN_BUDGET
 from projects.constants import ProjectMemoryScope, ProjectSourceMode
 from projects.models import PersonalProject
 from projects.services.project_service import memory_scope_project_id
@@ -35,10 +36,13 @@ class ProjectTestCase(TestCase):
         self.client.force_authenticate(self.user)
 
     def make_file(self, user, name, *, is_media=False, text=None):
-        file = File(user=user, file=f"files/{name}", name=name, is_media=is_media)
-        file.set_extracted_text(text)
-        file.save()
-        return file
+        return File.active_objects.create(
+            user=user,
+            file=f"files/{name}",
+            name=name,
+            is_media=is_media,
+            extracted_text=text,
+        )
 
     def make_project(self, user=None, **fields):
         return PersonalProject.active_objects.create(
@@ -501,7 +505,7 @@ class ProjectMemoryScopeTests(ProjectTestCase):
         self.assertEqual(memory_scope_project_id(self.project.id), self.project.id)
 
 
-TOO_LARGE_TEXT = " word" * (DEFAULT_FULL_FILES_TOKEN_BUDGET + 1)
+TOO_LARGE_TEXT = " word" * (DEFAULT_MAX_INPUT_TOKENS // 2 + 1)
 
 
 class ProjectSourceModeTests(ProjectTestCase):
@@ -598,9 +602,10 @@ class ProjectSourceModeTests(ProjectTestCase):
         self.assertEqual(response.data["file_count"], 2)
         self.assertEqual(
             response.data["estimated_tokens"],
-            shared.token_count + only_folder.token_count,
+            count_tokens(shared.extracted_text)
+            + count_tokens(only_folder.extracted_text),
         )
-        self.assertEqual(response.data["token_limit"], DEFAULT_FULL_FILES_TOKEN_BUDGET)
+        self.assertEqual(response.data["token_limit"], DEFAULT_MAX_INPUT_TOKENS // 2)
         self.assertTrue(response.data["fits_full_files"])
 
     def test_source_size_uses_the_chosen_models_window(self):

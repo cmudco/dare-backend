@@ -108,10 +108,7 @@ class LLM(models.Model):
     )
     max_input_tokens = models.PositiveIntegerField(
         default=DEFAULT_MAX_INPUT_TOKENS,
-        help_text=(
-            "Largest prompt the model accepts, in tokens. Picked files fit "
-            "for reading in full while they use at most half of it."
-        ),
+        help_text="Largest prompt the model accepts, in tokens.",
     )
     tier = models.CharField(
         max_length=20,
@@ -153,10 +150,6 @@ class LLM(models.Model):
 
     def __str__(self):
         return self.name
-
-    @property
-    def full_files_token_budget(self) -> int:
-        return self.max_input_tokens // 2
 
     @property
     def is_special_purpose(self) -> bool:
@@ -477,17 +470,13 @@ class Benchmark(TimeStampMixin):
     slug = models.SlugField(
         unique=True, help_text="Unique identifier (e.g., 'mmlu_pro', 'aaii')"
     )
-    name = models.CharField(
-        max_length=100, help_text="Display name (e.g., 'MMLU-Pro')"
-    )
+    name = models.CharField(max_length=100, help_text="Display name (e.g., 'MMLU-Pro')")
     display_name = models.CharField(
         max_length=200,
         blank=True,
         help_text="Full name for tooltips (e.g., 'Massive Multitask Language Understanding Pro')",
     )
-    description = models.TextField(
-        blank=True, help_text="What this benchmark measures"
-    )
+    description = models.TextField(blank=True, help_text="What this benchmark measures")
     category = models.CharField(
         max_length=150,
         help_text="Category: knowledge, reasoning, coding, safety, composite, multimodal",

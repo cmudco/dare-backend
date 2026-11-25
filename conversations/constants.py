@@ -1,11 +1,14 @@
 from enum import Enum
+
 from django.db import models
 
 APP_NAME = "conversations"
 
+
 class SenderType(models.IntegerChoices):
     PLAYER = 1, "Player"
     AI_ASSISTANT = 2, "AI Assistant"
+
 
 class Provider(Enum):
     OPENAI = "openai"
@@ -16,32 +19,40 @@ class Provider(Enum):
 
     @classmethod
     def choices(cls):
-        return [(provider.value, provider.name.replace("_", " ").title()) for provider in cls]
+        return [
+            (provider.value, provider.name.replace("_", " ").title())
+            for provider in cls
+        ]
+
 
 class ModelTier(models.TextChoices):
-    PREMIUM = 'premium', 'Premium'
-    ADVANCED = 'advanced', 'Advanced'
-    FLASH = 'flash', 'Flash'
+    PREMIUM = "premium", "Premium"
+    ADVANCED = "advanced", "Advanced"
+    FLASH = "flash", "Flash"
+
 
 class ModelEffort(models.TextChoices):
-    LOW = 'low', 'Low'
-    MEDIUM = 'medium', 'Medium'
-    HIGH = 'high', 'High'
-    XHIGH = 'xhigh', 'Extra High'
-    MAX = 'max', 'Max'
+    LOW = "low", "Low"
+    MEDIUM = "medium", "Medium"
+    HIGH = "high", "High"
+    XHIGH = "xhigh", "Extra High"
+    MAX = "max", "Max"
+
 
 class ModelReasoningLevel(models.TextChoices):
-    NONE = 'none', 'None'
-    COST_PREDICTABLE = 'cost_predictable', 'Cost Predictable'
-    COST_UNCONSTRAINED = 'cost_unconstrained', 'Cost Unconstrained'
+    NONE = "none", "None"
+    COST_PREDICTABLE = "cost_predictable", "Cost Predictable"
+    COST_UNCONSTRAINED = "cost_unconstrained", "Cost Unconstrained"
+
 
 class FeedbackType(models.TextChoices):
-    LIKE = 'like', 'Like'
-    DISLIKE = 'dislike', 'Dislike'
+    LIKE = "like", "Like"
+    DISLIKE = "dislike", "Dislike"
+
 
 class ConversationSource(models.TextChoices):
-    DARE = 'DARE', 'DARE'
-    SOCRATIC_BOTS = 'SocraticBots', 'SocraticBots'
+    DARE = "DARE", "DARE"
+    SOCRATIC_BOTS = "SocraticBots", "SocraticBots"
 
 
 # Reflective interviews need earlier answers throughout the session; zero
@@ -58,6 +69,7 @@ class RagMode(models.TextChoices):
 
 class WebSocketMessageType(Enum):
     """WebSocket message types for outgoing messages."""
+
     MESSAGE = "message"
     AI_STREAM = "ai_stream"
     ERROR = "error"
@@ -70,11 +82,15 @@ class WebSocketMessageType(Enum):
     ARTIFACT_STREAM = "artifact_stream"
     ARTIFACT_PAUSE = "artifact_pause"
     ARTIFACT_COMPLETE = "artifact_complete"
-    ARTIFACT_MODIFY_INIT = "artifact_modify_init"  # Modification started (append sections)
+    ARTIFACT_MODIFY_INIT = (
+        "artifact_modify_init"  # Modification started (append sections)
+    )
     ARTIFACT_CREATED = "artifact_created"  # Tool-created artifact (chart, diagram)
+
 
 class WebSocketAction(Enum):
     """WebSocket actions for incoming messages."""
+
     NEW_MESSAGE = "new_message"
     EDIT_MESSAGE = "edit_message"
     REGENERATE_RESPONSE = "regenerate_response"
@@ -84,25 +100,27 @@ class WebSocketAction(Enum):
 
 class ArtifactType(models.TextChoices):
     """Types of artifacts that can be generated."""
-    DOCUMENT = 'document', 'Document'
-    CODE = 'code', 'Code'
-    DIAGRAM = 'diagram', 'Diagram'
-    CHART = 'chart', 'Chart'
-    REACT = 'react', 'React Component'
-    DOCX = 'docx', 'Word Document'
-    PPTX = 'pptx', 'PowerPoint Presentation'
-    PDF = 'pdf', 'PDF Document'
-    HTML = 'html', 'HTML Page'
-    SVG = 'svg', 'SVG Image'
+
+    DOCUMENT = "document", "Document"
+    CODE = "code", "Code"
+    DIAGRAM = "diagram", "Diagram"
+    CHART = "chart", "Chart"
+    REACT = "react", "React Component"
+    DOCX = "docx", "Word Document"
+    PPTX = "pptx", "PowerPoint Presentation"
+    PDF = "pdf", "PDF Document"
+    HTML = "html", "HTML Page"
+    SVG = "svg", "SVG Image"
 
 
 class ArtifactStatus(models.TextChoices):
     """Status of artifact generation."""
-    PLANNING = 'planning', 'Planning'
-    GENERATING = 'generating', 'Generating'
-    PAUSED = 'paused', 'Paused'
-    COMPLETED = 'completed', 'Completed'
-    ERROR = 'error', 'Error'
+
+    PLANNING = "planning", "Planning"
+    GENERATING = "generating", "Generating"
+    PAUSED = "paused", "Paused"
+    COMPLETED = "completed", "Completed"
+    ERROR = "error", "Error"
 
 
 class ArtifactAction(models.TextChoices):
@@ -110,26 +128,30 @@ class ArtifactAction(models.TextChoices):
     Action type for artifact generation/modification.
     Used by frontend to indicate user intent.
     """
-    AUTO = 'auto', 'Auto Detect'
-    CREATE = 'create', 'Create New'
-    MODIFY = 'modify', 'Modify Existing'
+
+    AUTO = "auto", "Auto Detect"
+    CREATE = "create", "Create New"
+    MODIFY = "modify", "Modify Existing"
 
 
 class ToolCallStatus(models.TextChoices):
     """Status of a tool call execution."""
-    PENDING = 'pending', 'Pending'
-    AWAITING_CONFIRMATION = 'awaiting_confirmation', 'Awaiting Confirmation'
-    EXECUTING = 'executing', 'Executing'
-    COMPLETED = 'completed', 'Completed'
-    FAILED = 'failed', 'Failed'
-    CANCELLED = 'cancelled', 'Cancelled'
+
+    PENDING = "pending", "Pending"
+    AWAITING_CONFIRMATION = "awaiting_confirmation", "Awaiting Confirmation"
+    EXECUTING = "executing", "Executing"
+    COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
 
 
 class ToolCallOrigin(models.TextChoices):
     """Execution origin for a tool call."""
-    DARE = 'dare', 'DARE'
-    MCP = 'mcp', 'MCP'
-    PROVIDER = 'provider', 'Provider'
+
+    DARE = "dare", "DARE"
+    MCP = "mcp", "MCP"
+    PROVIDER = "provider", "Provider"
+
 
 # Default message sender names
 DEFAULT_AI_SENDER_NAME = "AI Assistant"
@@ -147,10 +169,8 @@ DEFAULT_MAX_CONTEXT_SNIPPETS = 4
 DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD = 0.5
 DEFAULT_HISTORY_LIMIT = 20
 
-# Files read in full fit while they use at most half the model's input window,
-# leaving the rest for history and the reply.
+# Input window for models without a seeded value and for gateway models.
 DEFAULT_MAX_INPUT_TOKENS = 200_000
-DEFAULT_FULL_FILES_TOKEN_BUDGET = DEFAULT_MAX_INPUT_TOKENS // 2
 
 # Default learning progress tracking prompt (for Socratic platform)
 DEFAULT_TRACKING_PROMPT = """You are an AI tutor designed to assess student learning progress. Based on the conversation history and learning goals provided, evaluate the student's understanding and provide constructive feedback.
@@ -171,6 +191,7 @@ DEFAULT_ARTIFACT_MAX_ITERATIONS = 5
 # Error codes and messages
 class ErrorCode:
     """Standard error codes for WebSocket responses."""
+
     # JSON/Data errors
     INVALID_JSON = "invalid_json"
     MISSING_DATA = "missing_data"
@@ -202,8 +223,10 @@ class ErrorCode:
     ARTIFACT_NOT_FOUND = "artifact_not_found"
     ARTIFACT_ALREADY_COMPLETE = "artifact_already_complete"
 
+
 class ErrorMessage:
     """Standard error messages for WebSocket responses."""
+
     # JSON/Data errors
     INVALID_JSON = "Invalid JSON format"
     MISSING_DATA = "Missing required data"
@@ -248,6 +271,7 @@ DEFAULT_FORK_TITLE = "Shared Chat"
 
 class SharingErrorCode:
     """Error codes for conversation/workflow sharing API responses."""
+
     PERMISSION_DENIED = "permission_denied"
     NOT_FOUND = "not_found"
     CANNOT_PUBLISH_FORKED = "cannot_publish_forked"
@@ -256,6 +280,7 @@ class SharingErrorCode:
 
 class SharingErrorMessage:
     """Error messages for conversation/workflow sharing API responses."""
+
     PERMISSION_DENIED = "Permission denied"
     CONVERSATION_NOT_FOUND = "Conversation not found"
     CONVERSATION_NOT_PUBLISHED = "Conversation not found or not published"
@@ -264,63 +289,63 @@ class SharingErrorMessage:
 
 # Extension-to-Renderer Mapping for unified artifact system
 ARTIFACT_RENDERERS = {
-    '.json': 'chart',      # application/vnd.dare.chart+json
-    '.mmd': 'mermaid',     # text/mermaid
-    '.docx': 'docx',
-    '.md': 'markdown',
-    '.py': 'code',
-    '.js': 'code',
-    '.ts': 'code',
-    '.jsx': 'react',
-    '.tsx': 'react',
-    '.html': 'iframe',
-    '.svg': 'svg',
-    '.pptx': 'pptx',
+    ".json": "chart",  # application/vnd.dare.chart+json
+    ".mmd": "mermaid",  # text/mermaid
+    ".docx": "docx",
+    ".md": "markdown",
+    ".py": "code",
+    ".js": "code",
+    ".ts": "code",
+    ".jsx": "react",
+    ".tsx": "react",
+    ".html": "iframe",
+    ".svg": "svg",
+    ".pptx": "pptx",
 }
 
 # Content type mappings for artifacts
 ARTIFACT_CONTENT_TYPES = {
-    'chart': 'application/vnd.dare.chart+json',
-    'diagram': 'text/mermaid',
-    'docx': 'application/vnd.dare.docx+json',
-    'pptx': 'application/vnd.dare.pptx+json',
-    'document': 'text/markdown',
-    'code': 'text/plain',
-    'react': 'application/vnd.dare.react+jsx',
-    'pdf': 'application/pdf',
-    'html': 'text/html',
-    'svg': 'image/svg+xml',
+    "chart": "application/vnd.dare.chart+json",
+    "diagram": "text/mermaid",
+    "docx": "application/vnd.dare.docx+json",
+    "pptx": "application/vnd.dare.pptx+json",
+    "document": "text/markdown",
+    "code": "text/plain",
+    "react": "application/vnd.dare.react+jsx",
+    "pdf": "application/pdf",
+    "html": "text/html",
+    "svg": "image/svg+xml",
 }
 
 # source_tool for artifacts a user opens from a chat code block.
-SNIPPET_ARTIFACT_SOURCE_TOOL = 'code_block'
+SNIPPET_ARTIFACT_SOURCE_TOOL = "code_block"
 
 # Fenced-code language -> (artifact type, file extension).
 SNIPPET_ARTIFACT_LANGUAGES = {
-    'jsx': (ArtifactType.REACT, 'jsx'),
-    'tsx': (ArtifactType.REACT, 'tsx'),
-    'html': (ArtifactType.HTML, 'html'),
-    'svg': (ArtifactType.SVG, 'svg'),
-    'mermaid': (ArtifactType.DIAGRAM, 'mmd'),
-    'python': (ArtifactType.CODE, 'py'),
-    'py': (ArtifactType.CODE, 'py'),
-    'javascript': (ArtifactType.CODE, 'js'),
-    'js': (ArtifactType.CODE, 'js'),
-    'typescript': (ArtifactType.CODE, 'ts'),
-    'ts': (ArtifactType.CODE, 'ts'),
-    'java': (ArtifactType.CODE, 'java'),
-    'c': (ArtifactType.CODE, 'c'),
-    'cpp': (ArtifactType.CODE, 'cpp'),
-    'csharp': (ArtifactType.CODE, 'cs'),
-    'go': (ArtifactType.CODE, 'go'),
-    'rust': (ArtifactType.CODE, 'rs'),
-    'ruby': (ArtifactType.CODE, 'rb'),
-    'php': (ArtifactType.CODE, 'php'),
-    'sql': (ArtifactType.CODE, 'sql'),
-    'css': (ArtifactType.CODE, 'css'),
-    'bash': (ArtifactType.CODE, 'sh'),
-    'shell': (ArtifactType.CODE, 'sh'),
-    'r': (ArtifactType.CODE, 'r'),
-    'json': (ArtifactType.CODE, 'json'),
-    'yaml': (ArtifactType.CODE, 'yaml'),
+    "jsx": (ArtifactType.REACT, "jsx"),
+    "tsx": (ArtifactType.REACT, "tsx"),
+    "html": (ArtifactType.HTML, "html"),
+    "svg": (ArtifactType.SVG, "svg"),
+    "mermaid": (ArtifactType.DIAGRAM, "mmd"),
+    "python": (ArtifactType.CODE, "py"),
+    "py": (ArtifactType.CODE, "py"),
+    "javascript": (ArtifactType.CODE, "js"),
+    "js": (ArtifactType.CODE, "js"),
+    "typescript": (ArtifactType.CODE, "ts"),
+    "ts": (ArtifactType.CODE, "ts"),
+    "java": (ArtifactType.CODE, "java"),
+    "c": (ArtifactType.CODE, "c"),
+    "cpp": (ArtifactType.CODE, "cpp"),
+    "csharp": (ArtifactType.CODE, "cs"),
+    "go": (ArtifactType.CODE, "go"),
+    "rust": (ArtifactType.CODE, "rs"),
+    "ruby": (ArtifactType.CODE, "rb"),
+    "php": (ArtifactType.CODE, "php"),
+    "sql": (ArtifactType.CODE, "sql"),
+    "css": (ArtifactType.CODE, "css"),
+    "bash": (ArtifactType.CODE, "sh"),
+    "shell": (ArtifactType.CODE, "sh"),
+    "r": (ArtifactType.CODE, "r"),
+    "json": (ArtifactType.CODE, "json"),
+    "yaml": (ArtifactType.CODE, "yaml"),
 }

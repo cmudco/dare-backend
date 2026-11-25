@@ -144,8 +144,6 @@ class DocumentIngestionService:
                     "parser_name",
                     "document_model",
                     "extracted_text",
-                    "token_count",
-                    "provider_token_counts",
                     "page_count",
                     "pages_without_text",
                     "status",

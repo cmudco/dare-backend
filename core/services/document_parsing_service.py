@@ -175,7 +175,7 @@ class DocumentParsingService:
         An empty string here means "parsed, and there was nothing", which is
         different from the NULL of a file never parsed at all.
         """
-        file.set_extracted_text(compose_document_text(parsed, [parsed.embeddable_text]))
+        file.extracted_text = compose_document_text(parsed, [parsed.embeddable_text])
         file.document_model = parsed.to_dict()
         file.page_count = parsed.structure.pages or None
         file.pages_without_text = parsed.structure.pages_without_text
@@ -184,8 +184,6 @@ class DocumentParsingService:
             file,
             update_fields=[
                 "extracted_text",
-                "token_count",
-                "provider_token_counts",
                 "document_model",
                 "page_count",
                 "pages_without_text",

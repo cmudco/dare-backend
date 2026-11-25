@@ -2,9 +2,8 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from core.services.model_ref import ModelRefUnavailable, resolve_model_ref
-from core.services.token_counting import measure_files
+from core.services.token_counting import SourceSize, measure_files
 from files.models import File, Folder
-from files.services.source_size import SourceSize
 from libraries.models import SharedLibrary, UserLibraryAccess
 from projects.constants import (
     PROJECT_DESCRIPTION_MAX_LENGTH,

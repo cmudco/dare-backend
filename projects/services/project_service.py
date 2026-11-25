@@ -8,7 +8,7 @@ from django.db.models import Count, Max, Q, QuerySet
 from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
 
-from conversations.constants import DEFAULT_FULL_FILES_TOKEN_BUDGET
+from conversations.constants import DEFAULT_MAX_INPUT_TOKENS
 from conversations.models import LLM, Conversation
 from core.services.model_ref import model_ref
 from core.services.token_counting import measure_files
@@ -28,8 +28,8 @@ class ProjectChatSources:
 
 
 def full_files_token_budget(llm: Optional[LLM]) -> int:
-    """Tokens of files a chat on this model reads in full before it searches."""
-    return llm.full_files_token_budget if llm else DEFAULT_FULL_FILES_TOKEN_BUDGET
+    """Half the model's window, leaving the rest for history and the reply."""
+    return (llm.max_input_tokens if llm else DEFAULT_MAX_INPUT_TOKENS) // 2
 
 
 def project_model_ref(project: PersonalProject) -> Optional[str]:

@@ -1,19 +1,21 @@
 """Tokens of files read in full, counted by the chosen model's own tokenizer.
 
-The o200k count stored at upload is exact for OpenAI. Claude and Gemini
-tokenize the same text differently (Claude 4.7+ uses about 1.5x more), so
-their free token-count APIs count each file once per model and the result is
-kept on the file.
+Each tokenizer counts a file once, the first time a picker or chat asks, and
+the count stays in ``File.token_counts`` until the text changes. OpenAI's
+o200k is counted locally. Claude and Gemini tokenize the same text differently
+(Claude 4.7+ uses about 1.5x more), so their free token-count APIs count it.
 """
 
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Dict, Optional
+from dataclasses import dataclass
+from typing import Callable, Dict, Iterable, Optional
 
 import anthropic
+import tiktoken
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import BooleanField, ExpressionWrapper, Q, QuerySet
 from google import genai
 from google.genai import errors as genai_errors
 
@@ -21,18 +23,45 @@ from conversations.constants import Provider
 from conversations.models import LLM
 from core.services.api_key_service import ProviderKeyMissing, get_provider_api_key_sync
 from files.models import File
-from files.services.source_size import SourceSize, estimate_source_size
 
 logger = logging.getLogger(__name__)
 
-# Provider tokens per o200k token, upper end, for files we cannot count.
+O200K = "o200k"
+_ENCODING = tiktoken.get_encoding("o200k_base")
+# Provider tokens per o200k token, upper end, for files a provider cannot count.
 ESTIMATE_FACTOR = {Provider.CLAUDE.value: 1.6, Provider.GEMINI.value: 1.1}
 MAX_PARALLEL_COUNTS = 8
 
 Counter = Callable[[str], int]
 
 
-def _counter(llm: LLM) -> Optional[Counter]:
+@dataclass(frozen=True)
+class SourceSize:
+    """Prompt cost of reading a set of files in full."""
+
+    file_count: int
+    estimated_tokens: int
+    # True when some files could not be counted by the model's tokenizer.
+    estimated: bool = False
+
+    def fits(self, token_budget: int) -> bool:
+        return self.estimated_tokens <= token_budget
+
+
+def count_tokens(text: str) -> int:
+    """Count with o200k without interpreting tokenizer sentinel strings."""
+    return len(_ENCODING.encode(text, disallowed_special=()))
+
+
+def _tokenizer(llm: Optional[LLM]) -> str:
+    if llm is None or llm.provider == Provider.OPENAI.value:
+        return O200K
+    return f"{llm.provider}:{llm.identifier}"
+
+
+def _counter(llm: Optional[LLM]) -> Optional[Counter]:
+    if llm is None or llm.provider == Provider.OPENAI.value:
+        return count_tokens
     if llm.provider == Provider.CLAUDE.value:
         claude = anthropic.Anthropic(
             api_key=get_provider_api_key_sync(Provider.CLAUDE.value)
@@ -49,6 +78,8 @@ def _counter(llm: LLM) -> Optional[Counter]:
 
 
 def _count(counter: Counter, file: File) -> Optional[int]:
+    if not file.extracted_text:
+        return 0
     try:
         return counter(file.extracted_text)
     except (anthropic.APIError, genai_errors.APIError) as error:
@@ -56,55 +87,59 @@ def _count(counter: Counter, file: File) -> Optional[int]:
         return None
 
 
-def _remember(file_id: int, key: str, tokens: int) -> None:
+def _remember(file_id: int, tokenizer: str, tokens: int) -> None:
     with transaction.atomic():
         file = File._base_manager.select_for_update().get(pk=file_id)
-        file.provider_token_counts[key] = tokens
-        file.save(update_fields=["provider_token_counts"])
+        file.token_counts[tokenizer] = tokens
+        file.save(update_fields=["token_counts"])
 
 
-def _fresh_counts(rows, key: str, counter: Optional[Counter]) -> Dict[int, int]:
-    """Count the files this model has not counted yet, in parallel."""
-    pending = [
-        file.pk
-        for file in rows
-        if key not in file.provider_token_counts and file.token_count
-    ]
-    if not counter or not pending:
-        return {}
+def _counts(rows: Iterable[File], tokenizer: str, counter: Counter) -> Dict[int, int]:
+    """Saved counts for this tokenizer, counting the missing ones in parallel."""
+    counts = {
+        f.pk: f.token_counts[tokenizer] for f in rows if tokenizer in f.token_counts
+    }
+    pending = [f.pk for f in rows if f.pk not in counts]
+    if not pending:
+        return counts
     texts = list(File._base_manager.filter(pk__in=pending).only("id", "extracted_text"))
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL_COUNTS) as pool:
-        counts = pool.map(lambda file: _count(counter, file), texts)
-        results = {file.pk: tokens for file, tokens in zip(texts, counts)}
-    for file_id, tokens in results.items():
-        if tokens is not None:
-            _remember(file_id, key, tokens)
-    return {file_id: tokens for file_id, tokens in results.items() if tokens}
+        for file, tokens in zip(texts, pool.map(lambda f: _count(counter, f), texts)):
+            if tokens is not None:
+                _remember(file.pk, tokenizer, tokens)
+                counts[file.pk] = tokens
+    return counts
 
 
 def measure_files(files: QuerySet, llm: Optional[LLM]) -> SourceSize:
     """Tokens these files take on this model; ``estimated`` when not all counted."""
-    if llm is None or llm.provider == Provider.OPENAI.value:
-        return estimate_source_size(files)
-
-    key = f"{llm.provider}:{llm.identifier}"
+    rows = list(
+        files.annotate(
+            parsed=ExpressionWrapper(
+                Q(extracted_text__isnull=False), output_field=BooleanField()
+            )
+        )
+        .only("id", "size", "token_counts")
+        .distinct()
+    )
+    parsed = [file for file in rows if file.parsed]
     try:
         counter = _counter(llm)
     except ProviderKeyMissing:
         counter = None
-    rows = list(
-        files.only("id", "size", "token_count", "provider_token_counts").distinct()
+    exact = _counts(parsed, _tokenizer(llm), counter) if counter else {}
+
+    factor = ESTIMATE_FACTOR.get(llm.provider, 1.0) if llm else 1.0
+    uncounted = [file for file in parsed if file.pk not in exact]
+    local = _counts(uncounted, O200K, count_tokens)
+    # A file not parsed yet counts its bytes at four a token, which overstates
+    # the text, so it can push a set over the budget but never under.
+    unparsed = [file for file in rows if not file.parsed]
+    estimates = [local[file.pk] for file in uncounted]
+    estimates += [math.ceil((file.size or 0) / 4) for file in unparsed]
+    return SourceSize(
+        file_count=len(rows),
+        estimated_tokens=sum(exact.values())
+        + sum(math.ceil(tokens * factor) for tokens in estimates),
+        estimated=bool(estimates),
     )
-    fresh = _fresh_counts(rows, key, counter)
-    factor = ESTIMATE_FACTOR.get(llm.provider, 1.0)
-    total, estimated = 0, False
-    for file in rows:
-        exact = file.provider_token_counts.get(key, fresh.get(file.pk))
-        if exact is None and file.token_count == 0:
-            exact = 0
-        if exact is None:
-            estimated = True
-            local = file.token_count or math.ceil((file.size or 0) / 4)
-            exact = math.ceil(local * factor)
-        total += exact
-    return SourceSize(file_count=len(rows), estimated_tokens=total, estimated=estimated)

@@ -19,8 +19,6 @@ from core.services.dtos.parsed_document_dto import (
 )
 from core.services.gemini_service import GeminiService
 from files.api.serializers import FileStructureSerializer
-from files.models import File
-from files.services.source_size import count_tokens
 
 
 class DocumentEnrichmentRoutingTests(SimpleTestCase):
@@ -65,14 +63,13 @@ class DocumentEnrichmentRoutingTests(SimpleTestCase):
         )
 
     def test_provider_control_characters_are_removed_before_persistence(self):
-        file = File()
+        file = SimpleNamespace(save=Mock())
         payload = {"elements": [{"description": "figure\x00text"}]}
 
         with patch("core.services.document_enrichment_service.persist_ingestion_file"):
             DocumentEnrichmentService._persist(file, "page\x00text", payload)
 
         self.assertEqual(file.extracted_text, "page text")
-        self.assertEqual(file.token_count, count_tokens("page text"))
         self.assertEqual(
             file.document_model["elements"][0]["description"], "figure text"
         )

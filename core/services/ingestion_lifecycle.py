@@ -30,6 +30,9 @@ def persist_ingestion_file(file: File, update_fields: Iterable[str]) -> None:
     values = {field: getattr(file, field) for field in update_fields}
     if "updated_at" in values:
         file.updated_at = values["updated_at"] = timezone.now()
+    if "extracted_text" in values:
+        # Token counts belong to the text they were made from.
+        file.token_counts = values["token_counts"] = {}
     if not owned_file(file).update(**values):
         raise IngestionCancelled("File removed or ingestion attempt replaced")
 

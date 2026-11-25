@@ -8,7 +8,6 @@ from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.storage.constants import StorageBackendChoice
 from core.storage.fields import DynamicStorageFileField
-from files.services.source_size import count_tokens
 from users.constants import VectorDBChoice
 
 from .constants import (
@@ -240,19 +239,14 @@ class File(BaseModel):
             "bounding box and caption."
         ),
     )
-    token_count = models.PositiveIntegerField(
-        blank=True,
-        null=True,
-        verbose_name=_("Token Count"),
-        help_text=_("Tokens in the extracted text; empty until the file is parsed."),
-    )
-    provider_token_counts = models.JSONField(
+    token_counts = models.JSONField(
         default=dict,
         blank=True,
-        verbose_name=_("Provider Token Counts"),
+        verbose_name=_("Token Counts"),
         help_text=_(
-            "The extracted text counted by providers' token-count APIs, keyed by "
-            "'<provider>:<model>'. Cleared when the text changes."
+            "Tokens in the extracted text per tokenizer, counted on first use: "
+            "'o200k' for OpenAI, '<provider>:<model>' for others. Cleared when "
+            "the text changes."
         ),
     )
     page_count = models.PositiveIntegerField(
@@ -298,12 +292,6 @@ class File(BaseModel):
     )
 
     active_objects = ActiveObjectsManager()
-
-    def set_extracted_text(self, text):
-        """Store the extracted text and its token count together."""
-        self.extracted_text = text
-        self.token_count = None if text is None else count_tokens(text)
-        self.provider_token_counts = {}
 
     class Meta:
         indexes = [

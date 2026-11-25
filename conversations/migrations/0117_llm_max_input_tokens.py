@@ -67,10 +67,7 @@ class Migration(migrations.Migration):
             name="max_input_tokens",
             field=models.PositiveIntegerField(
                 default=200000,
-                help_text=(
-                    "Largest prompt the model accepts, in tokens. Picked files fit "
-                    "for reading in full while they use at most half of it."
-                ),
+                help_text="Largest prompt the model accepts, in tokens.",
             ),
         ),
         migrations.RunPython(seed, migrations.RunPython.noop),
