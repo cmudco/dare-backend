@@ -44,6 +44,36 @@ WEB_SOURCES_HISTORY_NOTE = (
 )
 
 
+def files_read_turn(names: List[str]) -> Dict[str, str]:
+    """Note naming the files a user turn read in full, sent then and in every replay.
+
+    Identical text both times keeps each prompt a prefix of the next, so caches hit.
+    """
+    return {
+        "role": "user",
+        "content": (
+            f"[Full text of {', '.join(names)} was in the prompt for this turn. "
+            "File text is dropped from history after its turn, so later turns "
+            "see only this note; answers on this turn were grounded in that "
+            "text.]"
+        ),
+    }
+
+
+def _files_read(reply: Optional[Message]) -> List[str]:
+    """Names of the files a reply's context trace says were read in full."""
+    trace = reply.context_trace if reply else None
+    if not trace:
+        return []
+    return [
+        file["name"]
+        for stage in trace["stages"]
+        if stage["kind"] == "files"
+        for file in stage["files"]
+        if not file.get("sandbox")
+    ]
+
+
 @database_sync_to_async
 def get_conversation_history(
     conversation: Conversation, limit: int = 10, before: Optional[Message] = None
@@ -95,6 +125,11 @@ def get_conversation_history(
         messages = messages[skip : limit + skip] if limit > 0 else messages[skip:]
 
     ordered = list(reversed(messages))
+    replies = {
+        prompt.id: reply
+        for prompt, reply in zip(ordered, ordered[1:])
+        if reply.sender_type == SenderType.AI_ASSISTANT
+    }
 
     # Rank assistant messages from the newest backwards to apply the window.
     assistant_recency: Dict[int, int] = {}
@@ -134,6 +169,9 @@ def get_conversation_history(
                     )
             if not parts:
                 continue
+            files_read = _files_read(replies.get(msg.id))
+            if files_read:
+                result.append(files_read_turn(files_read))
             content = (
                 parts
                 if any(part["type"] == "image_url" for part in parts)

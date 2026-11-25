@@ -24,7 +24,7 @@ from .db_helpers import (
     get_referenced_summaries_context,
     get_selected_file_names,
 )
-from .history_helpers import get_conversation_history
+from .history_helpers import files_read_turn, get_conversation_history
 from .memory_context_helpers import add_memory_context_to_messages
 from .semantic_context_helpers import add_semantic_context_to_messages
 
@@ -54,13 +54,13 @@ def append_saved_system_prompt(
 def append_document_access_status(
     messages: List[Dict[str, str]],
     *,
-    full_file_names: List[str],
+    sandbox_file_names: List[str],
     embedding_file_names: List[str],
     has_grouped_sources: bool,
     has_library_sources: bool,
 ) -> None:
     """List document sources available to the current turn."""
-    selected_names = list(dict.fromkeys(full_file_names + embedding_file_names))
+    selected_names = list(dict.fromkeys(sandbox_file_names + embedding_file_names))
     has_current_sources = bool(
         selected_names or has_grouped_sources or has_library_sources
     )
@@ -198,7 +198,8 @@ async def build_standard_messages(
     messages = []
     memory_context = []
     trace = ContextTraceRecorder()
-    full_file_names: List[str] = []
+    sandbox_file_names: List[str] = []
+    read_file_names: List[str] = []
 
     # A saved conversation prompt is the user's system prompt. MCP-specific
     # instructions belong to each server's advertised instructions and tool
@@ -244,7 +245,7 @@ async def build_standard_messages(
                         "content": sandbox_files_note(names, code_sandbox.provider),
                     }
                 )
-                full_file_names = names
+                sandbox_file_names = names
                 stage["files"] = [{"name": name, "sandbox": True} for name in names]
     elif request.context.file_ids:
         with trace.stage("files") as stage:
@@ -254,7 +255,7 @@ async def build_standard_messages(
             for file_content in file_contents:
                 messages.append({"role": "user", "content": file_content["content"]})
             if file_contents:
-                full_file_names = [item["name"] for item in file_contents]
+                read_file_names = [item["name"] for item in file_contents]
                 stage["files"] = [
                     {"name": item["name"], "chars": len(item["content"])}
                     for item in file_contents
@@ -357,11 +358,13 @@ async def build_standard_messages(
     )
     append_document_access_status(
         messages,
-        full_file_names=full_file_names,
+        sandbox_file_names=sandbox_file_names,
         embedding_file_names=embedding_file_names,
         has_grouped_sources=bool(request.context.tag_ids or request.context.folder_ids),
         has_library_sources=bool(request.context.library_ids),
     )
+    if read_file_names:
+        messages.append(files_read_turn(read_file_names))
 
     # Add current user message (verbatim — labels like "User's message:" add
     # nothing and pollute few-shot structure)

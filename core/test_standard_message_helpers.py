@@ -1,8 +1,9 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 
 from conversations.constants import SenderType
 from conversations.models import Conversation, ConversationSummary, Message
@@ -11,6 +12,7 @@ from core.services.llm_helpers.db_helpers import (
     get_referenced_conversations_context,
     get_referenced_summaries_context,
 )
+from core.services.llm_helpers.history_helpers import files_read_turn
 from core.services.llm_helpers.standard_message_helpers import (
     append_document_access_status,
     append_saved_system_prompt,
@@ -43,7 +45,7 @@ class DocumentAccessStatusTests(SimpleTestCase):
 
         append_document_access_status(
             messages,
-            full_file_names=[],
+            sandbox_file_names=[],
             embedding_file_names=["alpha.pdf", "beta.pdf", "gamma.pdf"],
             has_grouped_sources=False,
             has_library_sources=False,
@@ -60,7 +62,7 @@ class DocumentAccessStatusTests(SimpleTestCase):
 
         append_document_access_status(
             messages,
-            full_file_names=[],
+            sandbox_file_names=[],
             embedding_file_names=[],
             has_grouped_sources=False,
             has_library_sources=False,
@@ -100,6 +102,82 @@ class FreshChatMessageTests(SimpleTestCase):
         result = await build_standard_messages(request, None, None)
 
         self.assertEqual(result.messages, [{"role": "user", "content": "Hello"}])
+
+
+HELENS = {
+    "id": 1,
+    "name": "mt-st-helens.docx",
+    "content": "File: mt-st-helens.docx\n\nThe 1980 eruption killed 57 people.",
+}
+
+
+@patch(
+    "core.services.llm_helpers.standard_message_helpers.get_full_file_contents",
+    new_callable=AsyncMock,
+    return_value=[HELENS],
+)
+@patch(
+    "core.services.llm_helpers.standard_message_helpers.get_selected_file_names",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+@patch(
+    "core.services.llm_helpers.standard_message_helpers.get_prompt",
+    new_callable=AsyncMock,
+    return_value=None,
+)
+class FileTurnHistoryTests(TransactionTestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            email="file-turns@example.test", password="test-only"
+        )
+        self.conversation = Conversation.active_objects.create(
+            user=self.user, conversation_id="file-turns", title="Volcanoes"
+        )
+
+    def ask(self, text, file_ids):
+        """Build one turn's prompt, then store the reply as the chat flow does."""
+        Message.active_objects.create(
+            conversation=self.conversation,
+            sender_type=SenderType.PLAYER,
+            message=text,
+        )
+        reply = Message.active_objects.create(
+            conversation=self.conversation,
+            sender_type=SenderType.AI_ASSISTANT,
+            message="",
+        )
+        request = LLMQueryRequest(
+            message=text,
+            user=self.user,
+            conversation=self.conversation,
+            message_obj=reply,
+            context=ContextConfig(file_ids=file_ids),
+        )
+        result = async_to_sync(build_standard_messages)(request, None, None)
+        reply.message = f"Answer to {text}"
+        reply.context_trace = result.context_trace
+        reply.save()
+        return result.messages
+
+    def test_each_turn_prompt_is_a_prefix_of_the_next(self, *_):
+        first = self.ask("Summarise the eruption", [HELENS["id"]])
+        second = self.ask("How many died?", [HELENS["id"]])
+
+        self.assertEqual(second[: len(first)], first)
+
+    def test_unticked_file_stays_named_on_the_turn_that_read_it(self, *_):
+        self.ask("Summarise the eruption", [HELENS["id"]])
+        second = self.ask("Were your earlier answers right?", [])
+
+        self.assertEqual(
+            second[:2],
+            [
+                files_read_turn(["mt-st-helens.docx"]),
+                {"role": "user", "content": "Summarise the eruption"},
+            ],
+        )
+        self.assertNotIn("57 people", str(second))
 
 
 class ReferencedSummaryScopeTests(TestCase):
