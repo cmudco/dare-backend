@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from channels.db import database_sync_to_async
 
 from conversations.constants import RagMode
-from core.services.code_sandbox import SandboxScope, sandbox_files_note
+from core.services.code_sandbox import SandboxScope, sandbox_note
 from core.services.document_processor import DocumentProcessor
 from core.services.dtos import LLMQueryRequest
 from core.services.file_processor import FileProcessor
@@ -237,14 +237,11 @@ async def build_standard_messages(
     # Add full file contents, or name them when they live in the sandbox
     if code_sandbox:
         names = code_sandbox.file_names
+        messages.append(
+            {"role": "user", "content": sandbox_note(names, code_sandbox.provider)}
+        )
         if names:
             with trace.stage("files") as stage:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": sandbox_files_note(names, code_sandbox.provider),
-                    }
-                )
                 sandbox_file_names = names
                 stage["files"] = [{"name": name, "sandbox": True} for name in names]
     elif request.context.file_ids:
