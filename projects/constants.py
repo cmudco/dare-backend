@@ -7,10 +7,6 @@ PROJECT_NAME_MAX_LENGTH = 120
 PROJECT_DESCRIPTION_MAX_LENGTH = 500
 PROJECT_INSTRUCTIONS_MAX_LENGTH = 20000
 
-# Full files are sent whole on every turn; past this the prompt crowds out
-# history and the reply on smaller models, so the chat uses search instead.
-FULL_FILES_TOKEN_LIMIT = 100_000
-
 
 class ProjectIcon(models.TextChoices):
     """Icon keys the frontend maps to glyphs."""

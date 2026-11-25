@@ -12,6 +12,7 @@ from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
 
 from .constants import (
+    DEFAULT_MAX_INPUT_TOKENS,
     ArtifactStatus,
     ArtifactType,
     ConversationSource,
@@ -104,6 +105,10 @@ class LLM(models.Model):
     is_audio_transcriber = models.BooleanField(
         default=False,
         help_text="Whether the model supports audio transcription (e.g., Whisper, Gemini).",
+    )
+    max_input_tokens = models.PositiveIntegerField(
+        default=DEFAULT_MAX_INPUT_TOKENS,
+        help_text="Largest prompt the model accepts, in tokens.",
     )
     tier = models.CharField(
         max_length=20,
@@ -465,17 +470,13 @@ class Benchmark(TimeStampMixin):
     slug = models.SlugField(
         unique=True, help_text="Unique identifier (e.g., 'mmlu_pro', 'aaii')"
     )
-    name = models.CharField(
-        max_length=100, help_text="Display name (e.g., 'MMLU-Pro')"
-    )
+    name = models.CharField(max_length=100, help_text="Display name (e.g., 'MMLU-Pro')")
     display_name = models.CharField(
         max_length=200,
         blank=True,
         help_text="Full name for tooltips (e.g., 'Massive Multitask Language Understanding Pro')",
     )
-    description = models.TextField(
-        blank=True, help_text="What this benchmark measures"
-    )
+    description = models.TextField(blank=True, help_text="What this benchmark measures")
     category = models.CharField(
         max_length=150,
         help_text="Category: knowledge, reasoning, coding, safety, composite, multimodal",

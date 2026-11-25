@@ -6,16 +6,14 @@ from rest_framework.test import APIClient
 
 from billing.constants import LiteLLMKeySourceChoice
 from billing.models import LiteLLMKey
+from conversations.constants import DEFAULT_MAX_INPUT_TOKENS
 from conversations.models import LLM, Conversation
+from core.services.token_counting import count_tokens
 from files.models import File, Folder
 from libraries.models import SharedLibrary, UserLibraryAccess
 from memory.models import MemoryRecord
 from memory.services.store import shortlist
-from projects.constants import (
-    FULL_FILES_TOKEN_LIMIT,
-    ProjectMemoryScope,
-    ProjectSourceMode,
-)
+from projects.constants import ProjectMemoryScope, ProjectSourceMode
 from projects.models import PersonalProject
 from projects.services.project_service import memory_scope_project_id
 from prompts.models import Prompt
@@ -507,7 +505,7 @@ class ProjectMemoryScopeTests(ProjectTestCase):
         self.assertEqual(memory_scope_project_id(self.project.id), self.project.id)
 
 
-TOO_LARGE_TEXT = "x" * (FULL_FILES_TOKEN_LIMIT * 4 + 4)
+TOO_LARGE_TEXT = " word" * (DEFAULT_MAX_INPUT_TOKENS // 2 + 1)
 
 
 class ProjectSourceModeTests(ProjectTestCase):
@@ -596,14 +594,37 @@ class ProjectSourceModeTests(ProjectTestCase):
 
         response = self.client.post(
             f"{PROJECTS_URL}source-size/",
-            {"file_ids": [shared.id], "folder_ids": [folder.id]},
+            {"file_ids": [shared.id], "folder_ids": [folder.id], "model_ref": None},
             format="json",
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["file_count"], 2)
-        self.assertEqual(response.data["estimated_tokens"], 200)
-        self.assertEqual(response.data["token_limit"], FULL_FILES_TOKEN_LIMIT)
+        self.assertEqual(
+            response.data["estimated_tokens"],
+            count_tokens(shared.extracted_text)
+            + count_tokens(only_folder.extracted_text),
+        )
+        self.assertEqual(response.data["token_limit"], DEFAULT_MAX_INPUT_TOKENS // 2)
+        self.assertTrue(response.data["fits_full_files"])
+
+    def test_source_size_uses_the_chosen_models_window(self):
+        large = self.make_file(self.user, "draft.pdf", text=TOO_LARGE_TEXT)
+        llm = LLM.objects.create(
+            name="Long",
+            identifier="long-context",
+            provider="claude",
+            max_input_tokens=1_000_000,
+        )
+
+        response = self.client.post(
+            f"{PROJECTS_URL}source-size/",
+            {"file_ids": [large.id], "model_ref": str(llm.id)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["token_limit"], 500_000)
         self.assertTrue(response.data["fits_full_files"])
 
     def test_source_size_rejects_another_users_files(self):

@@ -36,7 +36,7 @@ from billing.wallet_router import (
     resolve_active_wallet,
     sponsored_litellm_key,
 )
-from conversations.constants import Provider
+from conversations.constants import DEFAULT_MAX_INPUT_TOKENS, Provider
 from conversations.models import LLM
 from core.services.dtos.llm_descriptor_dto import (
     litellm_picker_id,
@@ -115,6 +115,7 @@ def _llm_entry(model: LLM) -> Dict[str, Any]:
         "default_adaptive_thinking_enabled": model.default_adaptive_thinking_enabled,
         "is_image_generator": model.is_image_generator,
         "is_audio_transcriber": model.is_audio_transcriber,
+        "max_input_tokens": model.max_input_tokens,
         "input_token_rate_per_million": model.input_token_rate_per_million,
         "output_token_rate_per_million": model.output_token_rate_per_million,
         "tier": model.tier,
@@ -154,6 +155,8 @@ def _litellm_entry(litellm_key, model_name: str) -> Dict[str, Any]:
         "is_image_generator": False,
         "is_audio_transcriber": False,
         "supports_web_search": gateway_web_search(model_name) is not None,
+        # A gateway does not report its models' windows.
+        "max_input_tokens": DEFAULT_MAX_INPUT_TOKENS,
         "input_token_rate_per_million": 0,
         "output_token_rate_per_million": 0,
         "tier": None,

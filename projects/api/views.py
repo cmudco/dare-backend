@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.services.token_counting import measure_files
 from projects.api.serializers import (
     PersonalProjectSerializer,
     SourceSizeRequestSerializer,
@@ -10,7 +11,7 @@ from projects.api.serializers import (
 )
 from projects.services.project_service import (
     delete_project,
-    estimate_source_size,
+    full_files_token_budget,
     owned_projects,
     selected_source_files,
 )
@@ -66,7 +67,20 @@ class PersonalProjectViewSet(viewsets.ModelViewSet):
             [file.pk for file in query.validated_data["file_ids"]],
             [folder.pk for folder in query.validated_data["folder_ids"]],
         )
-        return Response(SourceSizeSerializer(estimate_source_size(files)).data)
+        llm = query.validated_data["model_ref"]
+        size = measure_files(files, llm)
+        token_budget = full_files_token_budget(llm)
+        return Response(
+            SourceSizeSerializer(
+                {
+                    "file_count": size.file_count,
+                    "estimated_tokens": size.estimated_tokens,
+                    "token_limit": token_budget,
+                    "fits_full_files": size.fits(token_budget),
+                    "estimated": size.estimated,
+                }
+            ).data
+        )
 
     def _reloaded(self, pk: int) -> dict:
         """Re-read through the annotated queryset so counts are in the payload."""

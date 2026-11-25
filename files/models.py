@@ -239,6 +239,16 @@ class File(BaseModel):
             "bounding box and caption."
         ),
     )
+    token_counts = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name=_("Token Counts"),
+        help_text=_(
+            "Tokens in the extracted text per tokenizer, counted on first use: "
+            "'o200k' for OpenAI, '<provider>:<model>' for others. Cleared when "
+            "the text changes."
+        ),
+    )
     page_count = models.PositiveIntegerField(
         blank=True,
         null=True,
