@@ -71,6 +71,34 @@ class CachedTokenExtractionTests(SimpleTestCase):
         self.assertEqual(usage["cached_input_tokens"], 7201)
         self.assertNotIn("cache_write_input_tokens", usage)
 
+    def test_claude_server_tool_turn_bills_message_delta_totals(self):
+        extractor = ClaudeUsageExtractor()
+        extractor.extract_from_message_start(
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        input_tokens=1095,
+                        cache_read_input_tokens=0,
+                        cache_creation_input_tokens=0,
+                    )
+                )
+            )
+        )
+        usage = extractor.extract_from_message_delta(
+            SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=58157,
+                    cache_read_input_tokens=4000,
+                    cache_creation_input_tokens=1200,
+                    output_tokens=412,
+                )
+            )
+        )
+        self.assertEqual(usage["input_tokens"], 63357)
+        self.assertEqual(usage["cached_input_tokens"], 4000)
+        self.assertEqual(usage["cache_write_input_tokens"], 1200)
+        self.assertEqual(usage["output_tokens"], 412)
+
     def test_stopped_turn_keeps_provider_counts_and_estimates_the_rest(self):
         provisional = {
             "input_tokens": 7210,
@@ -104,7 +132,11 @@ class CachedTokenExtractionTests(SimpleTestCase):
 
     def test_accumulator_sums_cached_tokens_across_rounds(self):
         usage = UsageAccumulator()
-        usage.observe(1, {"input_tokens": 100, "output_tokens": 5, "cached_input_tokens": 60})
-        usage.observe(2, {"input_tokens": 200, "output_tokens": 5, "cached_input_tokens": 150})
+        usage.observe(
+            1, {"input_tokens": 100, "output_tokens": 5, "cached_input_tokens": 60}
+        )
+        usage.observe(
+            2, {"input_tokens": 200, "output_tokens": 5, "cached_input_tokens": 150}
+        )
         self.assertEqual(usage.totals()["cached_input_tokens"], 210)
         self.assertEqual(usage.breakdown()[1]["cached_input_tokens"], 150)

@@ -94,34 +94,46 @@ class ClaudeUsageExtractor:
 
     def __init__(self):
         """Initialize with state to track input tokens across events."""
-        self.input_tokens: Optional[int] = None
+        self.uncached_input_tokens: Optional[int] = None
         self.cache_read_tokens: int = 0
         self.cache_write_tokens: int = 0
+
+    @property
+    def input_tokens(self) -> Optional[int]:
+        """
+        The billable prompt: Anthropic reports the uncached part as
+        ``input_tokens`` and the cached parts separately, so their sum matches
+        what the other providers call input tokens.
+        """
+        if self.uncached_input_tokens is None:
+            return None
+        return (
+            self.uncached_input_tokens
+            + self.cache_read_tokens
+            + self.cache_write_tokens
+        )
+
+    def _read_input_side(self, usage) -> None:
+        """Take every input-side count this usage object reports."""
+        uncached = getattr(usage, "input_tokens", None)
+        cache_read = getattr(usage, "cache_read_input_tokens", None)
+        cache_write = getattr(usage, "cache_creation_input_tokens", None)
+        if uncached is not None:
+            self.uncached_input_tokens = int(uncached)
+        if cache_read is not None:
+            self.cache_read_tokens = int(cache_read)
+        if cache_write is not None:
+            self.cache_write_tokens = int(cache_write)
 
     def extract_from_message_start(self, event) -> None:
         """
         Extract input tokens from message_start event.
 
-        Anthropic reports the uncached prompt as ``input_tokens`` and the
-        cached portions separately; the billable prompt is their sum, so the
-        total is folded into ``input_tokens`` to match the other providers.
-
         Args:
             event: Message start event
         """
         if hasattr(event, "message") and hasattr(event.message, "usage"):
-            usage = event.message.usage
-            self.cache_read_tokens = int(
-                getattr(usage, "cache_read_input_tokens", 0) or 0
-            )
-            self.cache_write_tokens = int(
-                getattr(usage, "cache_creation_input_tokens", 0) or 0
-            )
-            self.input_tokens = (
-                int(usage.input_tokens or 0)
-                + self.cache_read_tokens
-                + self.cache_write_tokens
-            )
+            self._read_input_side(event.message.usage)
 
     def provisional_usage(self) -> Optional[Dict]:
         """Input-side usage known before any output streams; None until message_start."""
@@ -139,6 +151,11 @@ class ClaudeUsageExtractor:
         """
         Extract usage from message_delta event.
 
+        Its counts are cumulative for the whole response. With server tools
+        (web search, web fetch, code execution) Anthropic samples the model
+        several times inside one response, so the input side here is far
+        larger than message_start's and is the billed total.
+
         Args:
             event: Message delta event
 
@@ -148,6 +165,7 @@ class ClaudeUsageExtractor:
         if not hasattr(event, "usage"):
             return None
 
+        self._read_input_side(event.usage)
         output_tokens = event.usage.output_tokens
         if self.input_tokens is None:
             return None
@@ -181,7 +199,7 @@ class ClaudeUsageExtractor:
 
     def reset(self):
         """Reset the state."""
-        self.input_tokens = None
+        self.uncached_input_tokens = None
         self.cache_read_tokens = 0
         self.cache_write_tokens = 0
 

@@ -1,11 +1,14 @@
+import inspect
 from unittest import mock
 
+from anthropic.resources.messages import AsyncMessages
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from conversations.models import LLM, Conversation
 from core.services.claude_service import ClaudeService
+from core.services.code_sandbox import SANDBOX_TOOL_TYPE
 from core.services.openai_service import OpenAIService
 
 User = get_user_model()
@@ -108,6 +111,32 @@ class ClaudeCapabilityPayloadTests(TestCase):
         self.assertEqual(params["temperature"], 0.3)
         self.assertNotIn("output_config", params)
         self.assertNotIn("thinking", params)
+
+    async def test_reused_sandbox_container_goes_through_extra_body(self):
+        llm = LLM(
+            name="Claude Haiku 5.5",
+            identifier="claude-haiku-5-5",
+            provider="claude",
+            supports_temperature=True,
+        )
+        service = ClaudeService(llm=llm, api_key="test")
+        service._sandbox_container_id = "container_011"
+        service.client.messages.create = mock.AsyncMock()
+
+        await service._create_stream(
+            messages=[{"role": "user", "content": "Plot it"}],
+            max_tokens=100,
+            temperature=0.3,
+            effort=None,
+            tools=[
+                {"type": SANDBOX_TOOL_TYPE, "dare_file_ids": [], "dare_owner_ids": []}
+            ],
+        )
+
+        kwargs = service.client.messages.create.await_args.kwargs
+        inspect.signature(AsyncMessages.create).bind(None, **kwargs)
+        self.assertNotIn("container", kwargs)
+        self.assertEqual(kwargs["extra_body"]["container"], "container_011")
 
 
 class OpenAICapabilityPayloadTests(TestCase):
