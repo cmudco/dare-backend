@@ -131,15 +131,27 @@ def sandbox_marker(tools: Optional[List[Dict]]) -> Optional[Dict]:
     )
 
 
-def sandbox_files_note(names: List[str], provider: str) -> str:
-    """Prompt text that stands in for inlined file contents."""
+# DARE folds each run into a collapsed step; providers' own chat apps show it
+# inline, so without this the model answers "as shown above".
+_RESULTS_IN_ANSWER = (
+    "The user sees your code and what it prints only if they expand a "
+    "collapsed step, so write every result they asked for (numbers, tables) "
+    "in your answer."
+)
+
+
+def sandbox_note(names: List[str], provider: str) -> str:
+    """How to use the sandbox, naming the files loaded in it."""
     location, save_hint = _NOTE_LOCATIONS[provider]
+    guidance = f"{save_hint} {_RESULTS_IN_ANSWER}"
+    if not names:
+        return guidance
     listed = "\n".join(f"- {name}" for name in names)
     return (
         f"These files are loaded in your Python sandbox {location}:\n"
         f"{listed}\n\n"
         "Answer questions about the data by running Python on the full files. "
-        f"Never estimate a number from memory or from a partial read. {save_hint}"
+        f"Never estimate a number from memory or from a partial read. {guidance}"
     )
 
 
