@@ -500,6 +500,10 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
             "core.services.document_enrichment_service.ensure_ingestion_owner"
         ).start()
         patch(
+            "core.services.document_enrichment_service.is_flag_enabled_for_user",
+            return_value=True,
+        ).start()
+        patch(
             "core.services.document_enrichment_service.env.DOCUMENT_ENRICHMENT_CONCURRENCY",
             1,
         ).start()
