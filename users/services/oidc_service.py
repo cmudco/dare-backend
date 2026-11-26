@@ -80,6 +80,8 @@ def onboard_sso_user(user, claims: dict) -> None:
         if env.OIDC_ACCESS_CODE
         else None
     )
+    if code_group:
+        code_group.use_code()
     onboard_user(user, code_group)
     sync_platform_role(user, claims)
 
