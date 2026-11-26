@@ -304,6 +304,12 @@ class FileViewSet(viewsets.ModelViewSet):
     def tokens(self, request, pk=None):
         """Tokens of this file on each provider, by that provider's tokenizer."""
         file = self.get_object()
+        # Its text is being rewritten; a count now would outlive the new text.
+        if file.status == FileStatus.PROCESSING:
+            return Response(
+                {"detail": "This file is still processing."},
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(
             [
                 {

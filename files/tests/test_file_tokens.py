@@ -9,6 +9,7 @@ from rest_framework.test import APIClient
 from conversations.models import LLM
 from core.services import token_counting
 from core.services.token_counting import count_tokens
+from files.constants import FileStatus
 from files.models import File
 
 TEXT = "The river carries sediment downstream. " * 40
@@ -25,9 +26,13 @@ class FileTokensTests(TestCase):
             name="Terra", identifier="terra", provider="openai", max_input_tokens=1000
         )
 
-    def make_file(self, user):
+    def make_file(self, user, status=FileStatus.PROCESSED):
         return File.active_objects.create(
-            user=user, file="files/notes.md", name="notes.md", extracted_text=TEXT
+            user=user,
+            file="files/notes.md",
+            name="notes.md",
+            extracted_text=TEXT,
+            status=status,
         )
 
     def test_returns_and_keeps_each_providers_count(self):
@@ -59,3 +64,12 @@ class FileTokensTests(TestCase):
         response = self.client.get(f"/api/files/{theirs.id}/tokens/")
 
         self.assertEqual(response.status_code, 404)
+
+    def test_a_processing_file_is_not_counted_yet(self):
+        file = self.make_file(self.user, status=FileStatus.PROCESSING)
+
+        response = self.client.get(f"/api/files/{file.id}/tokens/")
+
+        self.assertEqual(response.status_code, 409)
+        file.refresh_from_db()
+        self.assertEqual(file.token_counts, {})
