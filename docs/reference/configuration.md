@@ -434,8 +434,6 @@ mandatory email verification. The feature is disabled until configured. See
 | `ACCESS_REQUEST_THROTTLE_RATE` | `300/hour` | Shared per-client request and registration limit while approval is enabled. Defaults support classrooms on a shared network. |
 | `ACCESS_REQUEST_REVIEW_CC` | Empty | Comma-separated copies for registration reviews, once per request. Invitation-request reviews have no copy from this setting. |
 | `TRUSTED_PROXY_COUNT` | `0` | Number of sanitizing trusted proxies used for per-client throttling. Direct backend access must be blocked when trusting forwarded headers. |
-| `DJANGO_SECURE_COOKIES` | `False` | Enable session/CSRF secure cookies for HTTPS deployments. |
-| `TRUST_PROXY_HTTPS` | `False` | Trust sanitized `X-Forwarded-Proto` only behind the actual TLS proxy. |
 | `ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS` | Empty | Explicit complete HTTP origins for a deliberately network-restricted deployment; otherwise public signup URLs require HTTPS. This adds no TLS. |
 
 Use the shared `EMAIL_PROVIDER` settings above. `emailDeliveryConfigured` in
@@ -444,9 +442,7 @@ submission or inbox delivery. Clients must retain `approvalRequired` independent
 and must not treat successful registration as authentication. Verification is
 required even if an administrator approves first.
 
-After migrations, run `python manage.py check_signup_setup --require-enabled`. It
-checks settings without sending mail. Use the explicit `--send-test-to` option only
-when a diagnostic recipient is intended. Configure Site domain and Site name for
+Configure Site domain and Site name for
 public URLs and email branding; retain backend routes while the frontend proxy
 serves verification and password-reset SPA pages.
 

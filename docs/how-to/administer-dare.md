@@ -240,19 +240,10 @@ The frontend proxy must route verification and reset pages to the SPA while keep
 
 Under **Sites**, set the public domain (including its port if used) and the deployment
 name. The name appears in email subjects, body and signature. Verification/reset
-emails greet the registered name, with the sign-in email as fallback. The setup
-command rejects placeholder domains; independently verify the display name as well.
+emails greet the registered name, with the sign-in email as fallback.
 
-Run `python manage.py check_signup_setup --require-enabled` after migrations and
-configuration. It checks the mail backend/sender, URL validity, eligible approvers,
-mandatory verification, Site domain and cookie/proxy settings. It sends no mail.
-Only `--send-test-to recipient@example.org` explicitly sends a diagnostic, whose
-inbox receipt must still be confirmed.
-
-For allowlisted HTTP, keep network restrictions, `DJANGO_DEBUG=False`,
-`DJANGO_SECURE_COOKIES=False` and `TRUST_PROXY_HTTPS=False`. For HTTPS termination,
-coordinate trusted certificates, public URLs, secure cookies and sanitized proxy
-headers together. `TRUSTED_PROXY_COUNT` must match the real trusted ingress and
+For allowlisted HTTP, keep network restrictions and `DJANGO_DEBUG=False`.
+`TRUSTED_PROXY_COUNT` must match the real trusted ingress and
 backends must not be directly reachable; a wrong count can make all users share
 one rate limit. When approval is enabled, the default shared request/registration limit is 300
 attempts per hour per client. Set `ACCESS_REQUEST_THROTTLE_RATE` for your deployment;

@@ -54,9 +54,6 @@ ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS = env.list(
 # Shared by a classroom behind one network address.
 ACCESS_REQUEST_THROTTLE_RATE = os.getenv("ACCESS_REQUEST_THROTTLE_RATE") or "300/hour"
 
-# Only behind HTTPS and a proxy that sanitizes forwarded headers.
-DJANGO_SECURE_COOKIES = env.bool("DJANGO_SECURE_COOKIES", default=False)
-TRUST_PROXY_HTTPS = env.bool("TRUST_PROXY_HTTPS", default=False)
 TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT") or 0)
 
 # sentry
