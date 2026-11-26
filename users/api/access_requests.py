@@ -9,7 +9,6 @@ from rest_framework.settings import api_settings
 from rest_framework.throttling import SimpleRateThrottle
 from rest_framework.views import APIView
 
-from users.access_request_constants import ACCESS_REQUEST_THROTTLE_RATE
 from users.services.access_request_service import (
     AccessRequestsUnavailable,
     active_policy,
@@ -36,10 +35,7 @@ class AccessRequestThrottle(SimpleRateThrottle):
     scope = "access_request"
 
     def get_rate(self):
-        return (
-            getattr(settings, "ACCESS_REQUEST_THROTTLE_RATE", None)
-            or ACCESS_REQUEST_THROTTLE_RATE
-        )
+        return settings.ACCESS_REQUEST_THROTTLE_RATE
 
     def get_cache_key(self, request, view):
         # Forwarded headers are client input unless the deployment sanitizes them.

@@ -111,12 +111,6 @@ def enqueue_delivery(delivery_id):
     return True
 
 
-def enqueue_signup_verification(email_id):
-    django_rq.get_queue("default").enqueue(
-        "users.tasks.send_signup_verification", email_id, job_timeout=60
-    )
-
-
 def active_policy():
     policy = AccessRequestPolicy.objects.filter(pk=1, enabled=True).first()
     if (
@@ -214,6 +208,16 @@ def activate_registration(request_id):
     access_request.save(update_fields=["activated_at"])
     queue_delivery(access_request, DeliveryKind.ACTIVATION, user.email)
     return True
+
+
+def activate_verified_registration(user):
+    """Activate the user's approved signup, now that their email is verified."""
+    request_id = (
+        AccessRequest.objects.filter(registered_user=user)
+        .values_list("pk", flat=True)
+        .first()
+    )
+    return request_id is not None and activate_registration(request_id)
 
 
 def approval_token(access_request, reviewer):
@@ -621,10 +625,7 @@ def deliver(delivery_id):
     failure = ""
     try:
         policy = active_policy()
-        backend = settings.EMAIL_BACKEND
-        if backend.endswith(
-            ("LoggingConsoleEmailBackend", "console.EmailBackend", "dummy.EmailBackend")
-        ):
+        if not settings.EMAIL_DELIVERY_CONFIGURED:
             failure = "mail_backend_not_delivering"
         elif mail_for(delivery, policy).send() != 1:
             failure = "mail_backend_rejected"

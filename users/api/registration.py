@@ -18,10 +18,7 @@ from users.api.access_requests import (
     AccessRequestThrottle,
 )
 from users.constants import AuthSourceChoice
-from users.services.access_request_service import (
-    enqueue_signup_verification,
-    registration_approval_enabled,
-)
+from users.services.access_request_service import registration_approval_enabled
 from users.utils import detect_platform_from_request
 
 
@@ -78,8 +75,7 @@ class CustomRegisterView(RegisterView):
             # Request verification explicitly without logging the applicant in.
             email = EmailAddress.objects.get(user=user, email=user.email)
             transaction.on_commit(
-                partial(enqueue_signup_verification, email.pk),
-                robust=True,
+                partial(email.send_confirmation, self.request._request, signup=True)
             )
         return user
 
@@ -92,7 +88,7 @@ class CustomRegisterView(RegisterView):
                 == account_settings.EmailVerificationMethod.MANDATORY
             ):
                 data["email_delivery_configured"] = settings.EMAIL_DELIVERY_CONFIGURED
-                data["approval_required"] = False
+            data["approval_required"] = False
             return data
         return {
             "detail": _(

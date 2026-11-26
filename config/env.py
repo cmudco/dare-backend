@@ -43,6 +43,18 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
 EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT") or 10)
+EMAIL_REPLY_TO = os.getenv("EMAIL_REPLY_TO", "").strip()
+
+# signup approval
+ACCESS_REQUEST_REVIEW_CC = env.list("ACCESS_REQUEST_REVIEW_CC", default=[])
+ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS = env.list(
+    "ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS", default=[]
+)
+# Shared by a classroom behind one network address.
+ACCESS_REQUEST_THROTTLE_RATE = os.getenv("ACCESS_REQUEST_THROTTLE_RATE") or "300/hour"
+
+TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT") or 0)
 
 # sentry
 SENTRY_DSN = os.getenv("SENTRY_DSN")

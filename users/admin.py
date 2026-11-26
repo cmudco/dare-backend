@@ -33,6 +33,7 @@ from users.admin_constants import (
 from core.helpers.admin_utils import render_span, render_status_badge
 
 from users import access_request_admin  # noqa: F401
+from users.services.access_request_service import activate_verified_registration
 
 
 class UserInline(admin.TabularInline):
@@ -272,7 +273,7 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
 class UserAdmin(DjangoUserAdmin):
     class CreditActionForm(ActionForm):
         amount = forms.DecimalField(
-            required=True,
+            required=False,
             min_value=Decimal('0.01'),
             max_digits=10,
             decimal_places=6,
@@ -428,6 +429,7 @@ class UserAdmin(DjangoUserAdmin):
                 address = EmailAddress.objects.create(user=user, email=user.email)
             address.set_verified(commit=True)
             address.set_as_primary()
+            activate_verified_registration(user)
         self.message_user(request, f"Marked {queryset.count()} user email(s) as verified.", level=messages.SUCCESS)
 
 admin.site.register(User, UserAdmin)

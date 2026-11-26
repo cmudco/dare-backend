@@ -29,5 +29,4 @@ class DeliveryState(models.TextChoices):
 
 
 APPROVAL_SALT = "users.access-request-approval"
-ACCESS_REQUEST_THROTTLE_RATE = "300/hour"
 DELIVERY_STALE_MINUTES = 5
