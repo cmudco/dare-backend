@@ -5,12 +5,23 @@ from django.core.mail.message import EmailMessage
 from django.utils import timezone
 from core.helpers.resend_email import send_email_via_resend
 from .models import EmailLog
+from django.conf import settings
 
 
 class LoggingEmailBackendMixin:
     """
     A mixin to add email logging functionality to an email backend.
     """
+
+    def prepare_reply_to(self, message):
+        reply_to = getattr(settings, "EMAIL_REPLY_TO", "")
+        if (
+            reply_to
+            and not message.reply_to
+            and not any(key.lower() == "reply-to" for key in message.extra_headers)
+        ):
+            message.reply_to = [reply_to]
+
     def send_messages(self, email_messages):
         """
         Overrides the send_messages method to log each email to the EmailLog model.
@@ -21,10 +32,15 @@ class LoggingEmailBackendMixin:
 
         sent_count = 0
         for message in email_messages:
+            self.prepare_reply_to(message)
             email_log = EmailLog.objects.create(
                 recipient=", ".join(message.to),
                 subject=message.subject,
-                body=message.body,
+                body=(
+                    "[Sensitive access-request content omitted]"
+                    if getattr(message, "dare_sensitive", False)
+                    else message.body
+                ),
                 status="PENDING",
             )
 
@@ -39,7 +55,11 @@ class LoggingEmailBackendMixin:
                     email_log.error_message = "Failed to send email (unknown error)"
             except Exception as e:
                 email_log.status = "FAILED"
-                email_log.error_message = str(e)
+                email_log.error_message = (
+                    "Mail provider failure"
+                    if getattr(message, "dare_sensitive", False)
+                    else str(e)
+                )
             finally:
                 email_log.save()
 
@@ -73,10 +93,15 @@ class LoggingResendEmailBackend(LoggingEmailBackendMixin, BaseEmailBackend):
 
         sent_count = 0
         for message in email_messages:
+            self.prepare_reply_to(message)
             email_log = EmailLog.objects.create(
                 recipient=", ".join(message.to),
                 subject=message.subject,
-                body=message.body,
+                body=(
+                    "[Sensitive access-request content omitted]"
+                    if getattr(message, "dare_sensitive", False)
+                    else message.body
+                ),
                 status="PENDING",
             )
 
@@ -91,7 +116,11 @@ class LoggingResendEmailBackend(LoggingEmailBackendMixin, BaseEmailBackend):
                     email_log.error_message = "Failed to send email (unknown error)"
             except Exception as e:
                 email_log.status = "FAILED"
-                email_log.error_message = str(e)
+                email_log.error_message = (
+                    "Mail provider failure"
+                    if getattr(message, "dare_sensitive", False)
+                    else str(e)
+                )
             finally:
                 email_log.save()
 

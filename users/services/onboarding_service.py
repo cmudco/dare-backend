@@ -14,9 +14,8 @@ DEFAULT_INITIAL_CREDIT = Decimal("5.00")
 
 
 def onboard_user(user, code_group=None):
-    """Join the access-code group, if any, and grant the starting wallet credit."""
+    """Join an access-code group whose slot the caller already took, and grant the starting credit."""
     if code_group:
-        code_group.use_code()
         user.access_code_group = code_group
         user.platform_role = code_group.default_role
     user.save()

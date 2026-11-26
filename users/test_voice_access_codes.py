@@ -156,7 +156,14 @@ class VoiceAccessCodeRegistrationTests(TestCase):
 
     @override_settings(
         SOCRATIC_BOTS_FRONTEND_URL="http://sb.example",
-        ACCOUNT_EMAIL_VERIFICATION="none",
+        ACCOUNT_EMAIL_VERIFICATION="mandatory",
+        CACHES={
+            "default": {
+                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+                "LOCATION": "voice-registration-test",
+            }
+        },
+        ACCESS_REQUEST_THROTTLE_RATE="1000/hour",
     )
     def test_registration_with_voice_code_assigns_researcher_role(self):
         response = self.client.post(
@@ -181,3 +188,6 @@ class VoiceAccessCodeRegistrationTests(TestCase):
         self.assertEqual(user.platform_role, RoleChoice.RESEARCHER)
         self.assertEqual(user.access_code_group.access_code, "VOICE-1")
         self.assertEqual(user.access_code_group.current_usage, 1)
+        self.assertNotIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+        self.assertFalse(user.emailaddress_set.filter(verified=True).exists())

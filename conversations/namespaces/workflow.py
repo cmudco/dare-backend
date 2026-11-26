@@ -22,6 +22,7 @@ from conversations.namespaces.utils import detect_platform_from_socketio_environ
 from workflows.services.workflow_coordinator import WorkflowCoordinator
 from asgiref.sync import sync_to_async
 from core.utils.db import db_reconnect_on_stale
+from users.models import User
 from users.sso import user_for_access_token
 
 
@@ -54,6 +55,20 @@ class WorkflowNamespace(socketio.AsyncNamespace):
 
     # ==================== Connection Lifecycle ====================
 
+    async def trigger_event(self, event, *args):
+        if event not in {'connect', 'disconnect'} and args:
+            session = self.sessions.get(args[0])
+            if session and session.get('user'):
+                active = await sync_to_async(db_reconnect_on_stale)(
+                    User.objects.filter(
+                        pk=session['user'].pk, is_active=True, is_deleted=False
+                    ).exists
+                )
+                if not active:
+                    await sio.disconnect(args[0], namespace=self.namespace)
+                    return {'error': 'Account inactive or unavailable'}
+        return await super().trigger_event(event, *args)
+
     async def on_connect(self, sid: str, environ: dict, auth: Optional[dict] = None):
         """
         Handle new connection with JWT authentication.
@@ -83,7 +98,7 @@ class WorkflowNamespace(socketio.AsyncNamespace):
             user = await sync_to_async(db_reconnect_on_stale)(
                 user_for_access_token, token
             )
-            if not user:
+            if not user or not user.is_active or user.is_deleted:
                 raise socketio.exceptions.ConnectionRefusedError(
                     'Invalid or expired token'
                 )
