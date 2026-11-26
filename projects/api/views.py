@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from core.services.token_counting import measure_files
+from core.services.token_counting import measure_with_reference
 from projects.api.serializers import (
     PersonalProjectSerializer,
     SourceSizeRequestSerializer,
@@ -68,7 +68,7 @@ class PersonalProjectViewSet(viewsets.ModelViewSet):
             [folder.pk for folder in query.validated_data["folder_ids"]],
         )
         llm = query.validated_data["model_ref"]
-        size = measure_files(files, llm)
+        size, reference = measure_with_reference(files, llm)
         token_budget = full_files_token_budget(llm)
         return Response(
             SourceSizeSerializer(
@@ -78,6 +78,10 @@ class PersonalProjectViewSet(viewsets.ModelViewSet):
                     "token_limit": token_budget,
                     "fits_full_files": size.fits(token_budget),
                     "estimated": size.estimated,
+                    "reference_model": reference[0].name if reference else None,
+                    "reference_tokens": (
+                        reference[1].estimated_tokens if reference else None
+                    ),
                 }
             ).data
         )

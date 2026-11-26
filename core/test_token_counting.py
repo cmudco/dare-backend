@@ -8,7 +8,11 @@ from conversations.models import LLM
 from core.services import token_counting
 from core.services.api_key_service import ProviderKeyMissing
 from core.services.ingestion_lifecycle import persist_ingestion_file
-from core.services.token_counting import count_tokens, measure_files
+from core.services.token_counting import (
+    count_tokens,
+    measure_files,
+    measure_with_reference,
+)
 from files.models import File
 from users.models import User
 
@@ -92,3 +96,26 @@ class MeasureFilesTests(TestCase):
         self.assertTrue(size.estimated)
         self.file.refresh_from_db()
         self.assertNotIn("claude:claude-haiku-5-5", self.file.token_counts)
+
+    def test_reference_model_count_comes_with_the_size(self):
+        chosen = LLM.objects.create(
+            name="Old", identifier="old", provider="openai", max_input_tokens=1000
+        )
+        reference = LLM.objects.create(
+            name="New", identifier="new", provider="openai", max_input_tokens=1000
+        )
+        with patch.object(token_counting, "provider_models", return_value=[reference]):
+            size, (model, reference_size) = measure_with_reference(self.files, chosen)
+
+        self.assertEqual(model, reference)
+        self.assertEqual(size.estimated_tokens, count_tokens(TEXT))
+        self.assertEqual(reference_size.estimated_tokens, count_tokens(TEXT))
+
+    def test_no_reference_when_the_model_is_the_reference(self):
+        reference = LLM.objects.create(
+            name="New", identifier="new", provider="openai", max_input_tokens=1000
+        )
+        with patch.object(token_counting, "provider_models", return_value=[reference]):
+            _, comparison = measure_with_reference(self.files, reference)
+
+        self.assertIsNone(comparison)

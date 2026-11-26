@@ -239,3 +239,25 @@ def measure_file_per_provider(file_id: int) -> List[Tuple[LLM, SourceSize]]:
     llms = provider_models()
     sizes = measure_files_for_models(File._base_manager.filter(pk=file_id), llms)
     return list(zip(llms, sizes))
+
+
+def measure_with_reference(
+    files: QuerySet, llm: Optional[LLM]
+) -> Tuple[SourceSize, Optional[Tuple[LLM, SourceSize]]]:
+    """Size on this model, and on its provider's reference model when that differs.
+
+    The reference count is what the Tokens dialog shows, so the picker can say
+    how far an older tokenizer drifts from it.
+    """
+    reference = next(
+        (
+            model
+            for model in provider_models()
+            if llm and model.provider == llm.provider and model.pk != llm.pk
+        ),
+        None,
+    )
+    if reference is None:
+        return measure_files(files, llm), None
+    size, reference_size = measure_files_for_models(files, [llm, reference])
+    return size, (reference, reference_size)

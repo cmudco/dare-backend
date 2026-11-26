@@ -229,3 +229,5 @@ class SourceSizeSerializer(serializers.Serializer):
     token_limit = serializers.IntegerField()
     fits_full_files = serializers.BooleanField()
     estimated = serializers.BooleanField()
+    reference_model = serializers.CharField(allow_null=True)
+    reference_tokens = serializers.IntegerField(allow_null=True)
