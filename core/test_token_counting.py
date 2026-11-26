@@ -1,5 +1,7 @@
 from unittest.mock import Mock, patch
 
+import httpx
+from django.core.files.base import ContentFile
 from django.test import TestCase
 
 from conversations.models import LLM
@@ -59,14 +61,18 @@ class MeasureFilesTests(TestCase):
         self.assertTrue(size.estimated)
         self.assertEqual(size.estimated_tokens, -(-count_tokens(TEXT) * 16 // 10))
 
-    def test_an_unparsed_file_counts_four_bytes_a_token(self):
-        self.make_file("pending.pdf", size=4000)
+    def test_an_unparsed_file_counts_the_text_the_chat_reads(self):
+        pending = File.active_objects.create(
+            user=self.user, name="pending.txt", size=10**6, extracted_text=None
+        )
+        pending.file.save("pending.txt", ContentFile(TEXT.encode()), save=True)
+        self.addCleanup(pending.file.delete, save=False)
 
         size = measure_files(self.files, None)
 
         self.assertEqual(size.file_count, 2)
-        self.assertEqual(size.estimated_tokens, count_tokens(TEXT) + 1000)
-        self.assertTrue(size.estimated)
+        self.assertEqual(size.estimated_tokens, 2 * count_tokens(TEXT))
+        self.assertFalse(size.estimated)
 
     def test_new_text_clears_the_counts(self):
         measure_files(self.files, None)
@@ -77,3 +83,12 @@ class MeasureFilesTests(TestCase):
 
         self.file.refresh_from_db()
         self.assertEqual(self.file.token_counts, {})
+
+    def test_a_network_failure_leaves_the_count_for_later(self):
+        counter = Mock(side_effect=httpx.ConnectError("offline"))
+        with patch.object(token_counting, "_counter", return_value=counter):
+            size = measure_files(self.files, self.claude)
+
+        self.assertTrue(size.estimated)
+        self.file.refresh_from_db()
+        self.assertNotIn("claude:claude-haiku-5-5", self.file.token_counts)

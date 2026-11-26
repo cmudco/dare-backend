@@ -505,7 +505,7 @@ class ProjectMemoryScopeTests(ProjectTestCase):
         self.assertEqual(memory_scope_project_id(self.project.id), self.project.id)
 
 
-TOO_LARGE_TEXT = " word" * (DEFAULT_MAX_INPUT_TOKENS // 2 + 1)
+TOO_LARGE_TEXT = " word" * (DEFAULT_MAX_INPUT_TOKENS + 1)
 
 
 class ProjectSourceModeTests(ProjectTestCase):
@@ -605,7 +605,7 @@ class ProjectSourceModeTests(ProjectTestCase):
             count_tokens(shared.extracted_text)
             + count_tokens(only_folder.extracted_text),
         )
-        self.assertEqual(response.data["token_limit"], DEFAULT_MAX_INPUT_TOKENS // 2)
+        self.assertEqual(response.data["token_limit"], 200_000)
         self.assertTrue(response.data["fits_full_files"])
 
     def test_source_size_uses_the_chosen_models_window(self):
@@ -624,7 +624,7 @@ class ProjectSourceModeTests(ProjectTestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["token_limit"], 500_000)
+        self.assertEqual(response.data["token_limit"], 1_000_000)
         self.assertTrue(response.data["fits_full_files"])
 
     def test_source_size_rejects_another_users_files(self):

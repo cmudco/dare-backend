@@ -28,6 +28,7 @@ from core.services.ingestion_lifecycle import (
     locked_ingestion_file,
     persist_ingestion_file,
 )
+from core.services.token_counting import store_provider_counts
 from files.constants import (
     DocumentOcrStatus,
     DocumentReprocessingAction,
@@ -272,6 +273,9 @@ class DocumentIngestionService:
                     else {}
                 ),
             )
+
+            # The text is final here, so each provider counts it once.
+            store_provider_counts(File._base_manager.filter(pk=file.pk))
 
             ocr_status = None
             if not reusing_transcriptions and not retry_images:

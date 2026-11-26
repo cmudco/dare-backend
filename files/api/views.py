@@ -31,6 +31,7 @@ from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
 from core.services.index_health import check_index_health
+from core.services.token_counting import measure_file_per_provider
 from core.services.vision_model_service import (
     VisionModelNotOffered,
     list_vision_models,
@@ -58,25 +59,25 @@ from ..services.document_reprocessing_service import (
     ReprocessingQueueError,
     ReprocessingUnavailable,
 )
-from ..services.trash_service import (
-    deleted_files,
-    move_to_trash,
-    purge_files,
-    restore_files,
-)
 from ..services.library_service import (
     LibraryItemNotFound,
     add_tags_to_files,
     remove_tags_from_files,
     search_file_contents,
 )
+from ..services.trash_service import (
+    deleted_files,
+    move_to_trash,
+    purge_files,
+    restore_files,
+)
 from .serializers import (
-    DeletedFileSerializer,
-    FileIdsSerializer,
     BulkTagSerializer,
     ContentMatchSerializer,
     ContentSearchQuerySerializer,
+    DeletedFileSerializer,
     DocumentOcrApprovalSerializer,
+    FileIdsSerializer,
     FileProcessingJourneySerializer,
     FileReprocessingSerializer,
     FileSerializer,
@@ -298,6 +299,22 @@ class FileViewSet(viewsets.ModelViewSet):
                 {"error": "Internal server error"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @action(detail=True, methods=["get"], url_path="tokens")
+    def tokens(self, request, pk=None):
+        """Tokens of this file on each provider, by that provider's tokenizer."""
+        file = self.get_object()
+        return Response(
+            [
+                {
+                    "provider": llm.provider,
+                    "model": llm.name,
+                    "tokens": size.estimated_tokens,
+                    "estimated": size.estimated,
+                }
+                for llm, size in measure_file_per_provider(file.pk)
+            ]
+        )
 
     @action(detail=False, methods=["post"], url_path="move")
     def move_files_to_folder(self, request):

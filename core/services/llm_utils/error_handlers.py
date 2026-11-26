@@ -7,9 +7,28 @@ from various LLM provider exceptions.
 
 from typing import Dict, Optional
 
+CONTEXT_OVERFLOW_MESSAGE = (
+    "Too long for this model: the files and chat don't fit in its context window. "
+    "Untick some files, use Embeddings to search them, or pick a model with a "
+    "larger context window."
+)
+# How Anthropic, OpenAI, LiteLLM and Gemini word a prompt over the window.
+_CONTEXT_OVERFLOW_MARKERS = (
+    "prompt is too long",
+    "context_length_exceeded",
+    "context window",
+    "maximum context length",
+    "input token count",
+)
+
 
 class BaseErrorHandler:
     """Base error handling utilities."""
+
+    @staticmethod
+    def is_context_overflow(error: Exception) -> bool:
+        text = f"{error} {getattr(error, 'body', '')}".lower()
+        return any(marker in text for marker in _CONTEXT_OVERFLOW_MARKERS)
 
     @staticmethod
     def check_for_overload_error(error: Exception) -> Optional[str]:
@@ -126,6 +145,8 @@ class OpenAIErrorHandler:
         # Check for overload first
         if BaseErrorHandler.check_for_overload_error(error):
             return "Due to high traffic, openai services are un-available"
+        if BaseErrorHandler.is_context_overflow(error):
+            return CONTEXT_OVERFLOW_MESSAGE
 
         # Try to extract from response
         resp = getattr(error, "response", None)
@@ -160,6 +181,8 @@ class ClaudeErrorHandler:
         # Check for overload first
         if BaseErrorHandler.check_for_overload_error(error):
             return "Due to high traffic, claude services are un-available"
+        if BaseErrorHandler.is_context_overflow(error):
+            return CONTEXT_OVERFLOW_MESSAGE
 
         # Try to extract from body
         body = getattr(error, "body", None)
@@ -210,6 +233,8 @@ class GeminiErrorHandler:
         # Check for overload first
         if BaseErrorHandler.check_for_overload_error(error):
             return "Due to high traffic, gemini services are un-available"
+        if BaseErrorHandler.is_context_overflow(error):
+            return CONTEXT_OVERFLOW_MESSAGE
 
         # Try to extract from response
         resp = getattr(error, "response", None)
