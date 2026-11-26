@@ -28,8 +28,7 @@ class ProjectChatSources:
 
 
 def full_files_token_budget(llm: Optional[LLM]) -> int:
-    """Half the model's window, leaving the rest for history and the reply."""
-    return (llm.max_input_tokens if llm else DEFAULT_MAX_INPUT_TOKENS) // 2
+    return llm.max_input_tokens if llm else DEFAULT_MAX_INPUT_TOKENS
 
 
 def project_model_ref(project: PersonalProject) -> Optional[str]:
