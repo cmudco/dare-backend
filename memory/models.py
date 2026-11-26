@@ -37,13 +37,12 @@ from memory.constants import (
 class MemoryRecord(BaseModel):
     """One fact or rule in the archive.
 
-    ``state`` and soft-deletion are orthogonal on purpose: ``state`` is the
-    *system's* lifecycle (retired by a newer fact, gated for privacy) while
-    ``is_deleted`` is the *user's* deletion (asked to forget it). Retrieval
-    requires both. Use :meth:`usable` rather than filtering on the bare string
-    "active" — the overlap with ``active_objects``' ``is_active`` naming is a
-    standing hazard, so the state filter should never appear bare at a call
-    site.
+    ``state`` is the system's lifecycle (retired by a newer fact, gated for
+    privacy). Forgetting is not a state: it erases the row and leaves a
+    :class:`MemoryTombstone`. Use :meth:`usable` rather than filtering on the
+    bare string "active" — the overlap with ``active_objects``' ``is_active``
+    naming is a standing hazard, so the state filter should never appear bare
+    at a call site.
     """
 
     # UUID rather than the project's BigAutoField default: the prototype's ids
@@ -300,6 +299,179 @@ class UserMemoryDocument(BaseModel):
 
     def __str__(self):
         return f"USER.md for user {self.user_id}"
+
+
+class MemoryStoreOrigin(BaseModel):
+    """This deployment's identity in memory exchanges, generated once.
+
+    An exported memory is globally identified by this id plus its own, so two
+    deployments never collide and a re-import can be recognised.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    singleton = models.BooleanField(
+        default=True,
+        unique=True,
+        editable=False,
+        help_text=_("Always true; the unique constraint keeps this to one row."),
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    def __str__(self):
+        return self.label
+
+    @property
+    def label(self) -> str:
+        return f"dare:{self.id}"
+
+    @classmethod
+    def current(cls) -> "MemoryStoreOrigin":
+        origin, _ = cls.objects.get_or_create(singleton=True)
+        return origin
+
+
+class MemoryTombstone(BaseModel):
+    """A forgotten memory: when, who and why, never what.
+
+    Keyed the way an exchange identifies a memory, by the store that issued
+    the identifier plus the identifier, so an older copy can be recognised and
+    refused instead of bringing the content back.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="memory_tombstones",
+        help_text=_("The person who forgot the memory."),
+    )
+    origin = models.CharField(
+        max_length=255,
+        help_text=_("The store that issued the identifier."),
+    )
+    identifier = models.CharField(
+        max_length=255,
+        help_text=_("The forgotten memory's identifier in that store."),
+    )
+    forgotten_at = models.DateTimeField(
+        help_text=_("When the memory was forgotten."),
+    )
+    reason = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=_("Why it was forgotten, in words a person can read."),
+    )
+    import_run = models.ForeignKey(
+        "MemoryImportRun",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tombstones",
+        help_text=_(
+            "Set when a file reported the forget; empty when it happened here."
+        ),
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "origin", "identifier"],
+                name="one_tombstone_per_forgotten_memory",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Tombstone for {self.origin} {self.identifier}"
+
+
+class MemoryImportRun(BaseModel):
+    """One Open Memory Protocol import and its receipt."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="memory_import_runs",
+        help_text=_("The person who imported the file."),
+    )
+    origin = models.CharField(
+        max_length=255,
+        help_text=_("The store the file says it was exported from."),
+    )
+    entries = models.JSONField(
+        default=list,
+        help_text=_(
+            "The receipt: one outcome per memory and tombstone in the file. "
+            "Refused content is never copied here."
+        ),
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "-created_at"], name="memimport_user_idx"),
+        ]
+
+    def __str__(self):
+        return f"Memory import for user {self.user_id} from {self.origin}"
+
+
+class MemoryImportedRecord(BaseModel):
+    """Where an imported memory came from, and exactly what arrived.
+
+    The memory keeps the identity its origin gave it, so importing the same
+    file twice changes nothing and a later export can name the original. The
+    received object is kept whole so fields DARE does not use survive.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="memory_imported_records",
+    )
+    record = models.OneToOneField(
+        MemoryRecord,
+        on_delete=models.CASCADE,
+        related_name="imported",
+        help_text=_("The local memory this became."),
+    )
+    import_run = models.ForeignKey(
+        MemoryImportRun,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="records",
+    )
+    origin = models.CharField(
+        max_length=255, help_text=_("The store that issued the identifier.")
+    )
+    identifier = models.CharField(
+        max_length=255, help_text=_("The memory's identifier in that store.")
+    )
+    raw = models.JSONField(help_text=_("The memory object as it was received."))
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "origin", "identifier"],
+                name="one_local_copy_per_imported_memory",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Imported {self.origin} {self.identifier}"
 
 
 class MemoryBackfillRun(BaseModel):

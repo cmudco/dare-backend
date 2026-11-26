@@ -6,7 +6,9 @@ declare snake_case and the frontend sees ``memoryType`` / ``createdAt``.
 
 from rest_framework import serializers
 
+from memory.constants import OmpOutcome
 from memory.models import MemoryBackfillRun
+from memory.services import omp_import
 
 
 class MemoryItemSerializer(serializers.Serializer):
@@ -22,6 +24,50 @@ class MemoryItemSerializer(serializers.Serializer):
     state = serializers.CharField(read_only=True, required=False, allow_null=True)
     valid_until = serializers.CharField(read_only=True, required=False, allow_null=True)
     replaced_by = serializers.CharField(read_only=True, required=False, allow_null=True)
+
+
+class OmpExportQuerySerializer(serializers.Serializer):
+    include_sensitive = serializers.BooleanField(
+        default=False,
+        help_text="Also export held memories and ones labelled health or third-party.",
+    )
+
+
+class OmpReceiptEntrySerializer(serializers.Serializer):
+    kind = serializers.CharField(help_text="memory or tombstone")
+    origin = serializers.CharField()
+    identifier = serializers.CharField(allow_blank=True)
+    status = serializers.ChoiceField(choices=OmpOutcome.choices)
+    reason = serializers.CharField(allow_blank=True)
+    record_id = serializers.CharField(allow_blank=True)
+
+
+class MemoryImportRunSerializer(serializers.Serializer):
+    """An import and its receipt: what happened to each memory in the file."""
+
+    id = serializers.UUIDField()
+    created_at = serializers.DateTimeField()
+    origin = serializers.CharField()
+    counts = serializers.SerializerMethodField()
+    held = serializers.SerializerMethodField(
+        help_text="Imported memories, from any import, still waiting to be released."
+    )
+    entries = OmpReceiptEntrySerializer(many=True)
+
+    def get_counts(self, run) -> dict:
+        counts = {status: 0 for status in OmpOutcome.values}
+        for entry in run.entries:
+            if entry["kind"] == "memory":
+                counts[entry["status"]] += 1
+        return counts
+
+    def get_held(self, run) -> int:
+        return omp_import.held_imports_count(run.user)
+
+
+class OmpReleaseResponseSerializer(serializers.Serializer):
+    released = serializers.IntegerField()
+    still_held = serializers.IntegerField()
 
 
 class MemorySearchRequestSerializer(serializers.Serializer):

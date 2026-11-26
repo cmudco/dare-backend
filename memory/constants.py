@@ -106,6 +106,31 @@ TOKEN_BUDGET = 500
 TOKEN_WARNING = round(TOKEN_BUDGET * 0.8)
 
 
+# Open Memory Protocol exchange
+
+# Editors' draft v0.5, minimal profile. The draft is not an adopted standard.
+OMP_PROTOCOL_VERSION = "0.5"
+OMP_PROFILE = "minimal"
+OMP_WRITER_ID = "agent:dare-memory-writer"
+# Left out of an export unless the person opts in: a receiver that does not
+# know DARE's held state would treat these as ordinary active memories.
+OMP_WITHHELD_SENSITIVITIES = frozenset({Sensitivity.HEALTH, Sensitivity.THIRD_PARTY})
+OMP_IMPORT_VERSIONS = frozenset({"0.2", OMP_PROTOCOL_VERSION})
+OMP_TEXT_MEDIA_TYPES = frozenset({"text/plain", "text/markdown"})
+OMP_IMPORT_MAX_RECORDS = 3000
+OMP_IMPORT_BODY_LIMIT = 4000
+
+
+class OmpOutcome(models.TextChoices):
+    """What an import did with one memory or tombstone from the file."""
+
+    ACCEPTED = "accepted", _("Accepted")
+    TRANSFORMED = "transformed", _("Transformed")
+    UNCHANGED = "unchanged", _("Unchanged")
+    OMITTED = "omitted", _("Omitted")
+    REJECTED = "rejected", _("Rejected")
+
+
 # Consolidation
 
 MERGE_SIMILARITY = 0.74

@@ -5,6 +5,8 @@ working unchanged; the v2 surface exposes the layered store for round 2.
 """
 
 from django.urls import include, path
+from rest_framework.parsers import JSONParser
+from rest_framework.renderers import JSONRenderer
 from rest_framework.routers import DefaultRouter
 
 from memory.api.views import MemoryViewSet
@@ -47,6 +49,30 @@ urlpatterns = [
         "v2/export/",
         MemoryViewSet.as_view({"get": "export"}),
         name="memory-v2-export",
+    ),
+    path(
+        "v2/omp/export/",
+        # OMP field names are snake_case on the wire, so this route skips the
+        # global camel-case renderer.
+        MemoryViewSet.as_view({"get": "omp_export"}, renderer_classes=[JSONRenderer]),
+        name="memory-v2-omp-export",
+    ),
+    path(
+        "v2/omp/records/<uuid:record_id>/",
+        MemoryViewSet.as_view({"get": "omp_record"}, renderer_classes=[JSONRenderer]),
+        name="memory-v2-omp-record",
+    ),
+    path(
+        "v2/omp/import/",
+        # The file's own field names must arrive untouched, so this route
+        # skips the global camel-case parser.
+        MemoryViewSet.as_view({"post": "omp_import"}, parser_classes=[JSONParser]),
+        name="memory-v2-omp-import",
+    ),
+    path(
+        "v2/omp/imports/release/",
+        MemoryViewSet.as_view({"post": "omp_release"}),
+        name="memory-v2-omp-release",
     ),
     path(
         "v2/import/",
