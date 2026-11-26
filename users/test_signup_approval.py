@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import TestCase, override_settings
+from django.urls import reverse
 from redis.exceptions import ConnectionError as RedisConnectionError
 from rest_framework.test import APIClient
 
@@ -146,6 +147,20 @@ class SignupApprovalTests(TestCase):
         EmailAddress.objects.filter(user=user).update(verified=True)
         self.assertFalse(activate_registration(request.pk))
         self.decide(request, True)
+        user.refresh_from_db()
+        self.assertTrue(user.is_active)
+
+    def test_admin_mark_email_verified_activates_approved_signup(self):
+        user = self.applicant()
+        request = AccessRequest.objects.get(registered_user=user)
+        self.decide(request, True)
+        self.client.force_login(self.reviewer)
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("admin:users_user_changelist"),
+                {"action": "mark_email_verified", "_selected_action": [user.pk]},
+            )
+        self.assertEqual(response.status_code, 302)
         user.refresh_from_db()
         self.assertTrue(user.is_active)
 

@@ -210,6 +210,16 @@ def activate_registration(request_id):
     return True
 
 
+def activate_verified_registration(user):
+    """Activate the user's approved signup, now that their email is verified."""
+    request_id = (
+        AccessRequest.objects.filter(registered_user=user)
+        .values_list("pk", flat=True)
+        .first()
+    )
+    return request_id is not None and activate_registration(request_id)
+
+
 def approval_token(access_request, reviewer):
     return signing.dumps(
         {
