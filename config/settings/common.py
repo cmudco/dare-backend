@@ -165,17 +165,12 @@ EMAIL_HOST_USER = env.EMAIL_HOST_USER
 EMAIL_HOST_PASSWORD = env.EMAIL_HOST_PASSWORD
 EMAIL_FROM = env.EMAIL_FROM
 DEFAULT_FROM_EMAIL = EMAIL_FROM
-EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO", "").strip()
-ACCESS_REQUEST_REVIEW_CC = [
-    address.strip()
-    for address in os.environ.get("ACCESS_REQUEST_REVIEW_CC", "").split(",")
-    if address.strip()
-]
+EMAIL_REPLY_TO = env.EMAIL_REPLY_TO
+ACCESS_REQUEST_REVIEW_CC = [address.strip() for address in env.ACCESS_REQUEST_REVIEW_CC]
 # Explicit full origins only; empty keeps production signup HTTPS-only.
 ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS = [
     origin.strip().lower().rstrip("/")
-    for origin in os.environ.get("ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS", "").split(",")
-    if origin.strip()
+    for origin in env.ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS
 ]
 EMAIL_PORT = env.EMAIL_PORT
 EMAIL_USE_TLS = env.EMAIL_USE_TLS
@@ -187,18 +182,16 @@ EMAIL_PROVIDER = resolve_email_provider(
 )
 EMAIL_BACKEND = EMAIL_BACKENDS[EMAIL_PROVIDER]
 EMAIL_DELIVERY_CONFIGURED = EMAIL_PROVIDER != "console"
-EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
-ACCESS_REQUEST_THROTTLE_RATE = os.environ.get("ACCESS_REQUEST_THROTTLE_RATE")
+EMAIL_TIMEOUT = env.EMAIL_TIMEOUT
+ACCESS_REQUEST_THROTTLE_RATE = env.ACCESS_REQUEST_THROTTLE_RATE
 
-SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SECURE_COOKIES", "False") == "True"
+SESSION_COOKIE_SECURE = env.DJANGO_SECURE_COOKIES
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 SECURE_PROXY_SSL_HEADER = (
-    ("HTTP_X_FORWARDED_PROTO", "https")
-    if os.environ.get("TRUST_PROXY_HTTPS", "False") == "True"
-    else None
+    ("HTTP_X_FORWARDED_PROTO", "https") if env.TRUST_PROXY_HTTPS else None
 )
 
-TRUSTED_PROXY_COUNT = int(os.environ.get("TRUSTED_PROXY_COUNT", "0"))
+TRUSTED_PROXY_COUNT = env.TRUSTED_PROXY_COUNT
 if TRUSTED_PROXY_COUNT < 0:
     raise ImproperlyConfigured("TRUSTED_PROXY_COUNT must be nonnegative.")
 

@@ -111,12 +111,6 @@ def enqueue_delivery(delivery_id):
     return True
 
 
-def enqueue_signup_verification(email_id):
-    django_rq.get_queue("default").enqueue(
-        "users.tasks.send_signup_verification", email_id, job_timeout=60
-    )
-
-
 def active_policy():
     policy = AccessRequestPolicy.objects.filter(pk=1, enabled=True).first()
     if (
@@ -621,10 +615,7 @@ def deliver(delivery_id):
     failure = ""
     try:
         policy = active_policy()
-        backend = settings.EMAIL_BACKEND
-        if backend.endswith(
-            ("LoggingConsoleEmailBackend", "console.EmailBackend", "dummy.EmailBackend")
-        ):
+        if not settings.EMAIL_DELIVERY_CONFIGURED:
             failure = "mail_backend_not_delivering"
         elif mail_for(delivery, policy).send() != 1:
             failure = "mail_backend_rejected"

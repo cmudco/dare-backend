@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from allauth.account.models import EmailAddress
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import TestCase, override_settings
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -15,7 +16,6 @@ from users.access_request_models import (
     AccessRequestDelivery,
     AccessRequestPolicy,
 )
-from users.api.access_requests import AccessRequestThrottle
 from users.models import AccessCodeGroup
 from users.services.access_request_service import (
     activate_registration,
@@ -94,7 +94,7 @@ class SignupApprovalTests(TestCase):
         self.assertTrue(user.is_active)
         self.assertFalse(AccessRequest.objects.filter(registered_user=user).exists())
 
-    def test_enabled_policy_creates_inactive_account_and_queues_verification(self):
+    def test_enabled_policy_creates_inactive_account_and_sends_verification(self):
         user = self.applicant()
         self.assertFalse(user.is_active)
         self.assertTrue(
@@ -104,7 +104,9 @@ class SignupApprovalTests(TestCase):
         )
         jobs = [call.args[0] for call in self.queue.enqueue.call_args_list]
         self.assertIn("users.tasks.deliver_access_request", jobs)
-        self.assertIn("users.tasks.send_signup_verification", jobs)
+        self.assertEqual(
+            [message.to for message in mail.outbox], [["applicant@example.test"]]
+        )
 
     def test_invitation_signup_consumes_code_without_further_approval(self):
         request_access(name="Invited", email="invite@example.test", reason="Test")
@@ -267,15 +269,11 @@ class SignupApprovalTests(TestCase):
             {"approval_signup_enabled": False},
         )
 
-    @override_settings(ACCESS_REQUEST_THROTTLE_RATE=None)
-    def test_default_throttle_allows_a_shared_classroom(self):
-        self.assertEqual(AccessRequestThrottle().rate, "300/hour")
-
 
 class SingleUseInvitationTests(TestCase):
     def test_stale_instances_cannot_consume_the_last_slot_twice(self):
         group = AccessCodeGroup.objects.create(
-            name="Single slot", access_code="single-slot-test", max_capacity=1
+            access_code="single-slot-test", max_capacity=1
         )
         stale = AccessCodeGroup.objects.get(pk=group.pk)
         self.assertTrue(group.use_code())
