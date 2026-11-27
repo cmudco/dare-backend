@@ -185,7 +185,9 @@ def alias_candidates(
         for long in by_surname[(len(tokens), tokens[-1])]:
             if short < long and _initials_match(tokens, meaningful[long]):
                 found[(short, long)] = "initials"
-        for long in by_shape[(len(tokens), short[0])] if short in non_person else ():
+        if short not in non_person:
+            continue
+        for long in by_shape[(len(tokens), short[0])]:
             if (
                 long in non_person
                 and short < long
@@ -662,26 +664,22 @@ def _person_groups(people: Sequence[NamedKey]) -> List[List[NamedKey]]:
     order = sorted(range(len(people)), key=lambda i: (-people[i].weight, people[i].key))
     for index in order:
         target = None
-        linked = sorted(
-            {group_of[other] for other in links[index] if other in group_of}
-        )
-        for group in linked:
+        for group in sorted({group_of[o] for o in links[index] if o in group_of}):
             joining = [index] if target is None else members[group]
-            into = members[group] if target is None else members[target] + [index]
+            into = members[group] if target is None else members[target]
             if any(_clash(people[a], people[b]) for a in joining for b in into):
                 continue
             if target is None:
                 target = group
                 members[group].append(index)
-                group_of[index] = group
-                continue
-            moved = members.pop(group)
-            for other in moved:
-                group_of[other] = target
-            members[target].extend(moved)
+            else:
+                moved = members.pop(group)
+                members[target].extend(moved)
+                group_of.update(dict.fromkeys(moved, target))
         if target is None:
-            group_of[index] = index
+            target = index
             members[index] = [index]
+        group_of[index] = target
     return [
         sorted((people[i] for i in group), key=lambda m: (-m.weight, m.key))
         for group in members.values()

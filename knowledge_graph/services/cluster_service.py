@@ -126,10 +126,7 @@ class EntityClusterService:
         by_block: Dict[str, EntityCluster] = {}
         for key in sorted(known):
             by_block.setdefault(blocking_key(key), known[key].cluster)
-        refused = {
-            (d.key_a, d.key_b)
-            for d in AliasDecision.objects.filter(user=user, same=False)
-        }
+        refused = cls._refused(user)
         created = 0
         for stats in cls._key_stats(user):
             if stats.key in known:
@@ -154,6 +151,14 @@ class EntityClusterService:
             created += 1
         cls._apply_rule_merges(user, refused, rule_merges(cls._key_stats(user)))
         return created
+
+    @staticmethod
+    def _refused(user) -> Set[Tuple[str, str]]:
+        return set(
+            AliasDecision.objects.filter(user=user, same=False).values_list(
+                "key_a", "key_b"
+            )
+        )
 
     @classmethod
     def _apply_rule_merges(
@@ -208,11 +213,7 @@ class EntityClusterService:
             .values_list("key", flat=True)
         )
         separated = cls._split_unsupported(user, stats, merges, scope)
-        refused = {
-            (d.key_a, d.key_b)
-            for d in AliasDecision.objects.filter(user=user, same=False)
-        }
-        merged = cls._apply_rule_merges(user, refused, merges, scope)
+        merged = cls._apply_rule_merges(user, cls._refused(user), merges, scope)
         cls.refresh_labels(user)
         return NameCheck(
             merged=merged,
