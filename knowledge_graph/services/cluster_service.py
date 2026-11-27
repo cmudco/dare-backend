@@ -3,7 +3,7 @@
 import logging
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -26,7 +26,10 @@ from knowledge_graph.domain.alias_rules import (
     defined_abbreviations,
     display_name,
     generic_keys,
+    is_full_name,
+    merge_pairs,
     people_conflict,
+    review_pairs,
     rule_merges,
 )
 from knowledge_graph.models import (
@@ -48,12 +51,10 @@ ALIAS_INPUT = (
 
 
 @dataclass(frozen=True)
-class KeyStats:
-    key: str
-    text: str
-    kind: str
-    weight: int
-    files: frozenset = frozenset()
+class NameCheck:
+    merged: int
+    separated: int
+    review: int
 
 
 def _ordered(key_a: str, key_b: str) -> Tuple[str, str]:
@@ -67,27 +68,44 @@ class EntityClusterService:
             file__user=user, file__is_deleted=False, file__is_active=True
         ).exclude(kind__in=LINKING_EXCLUDED_KINDS)
 
-    @classmethod
-    def _key_stats(cls, user) -> List[KeyStats]:
+    @staticmethod
+    def _named_keys(rows: Iterable[Dict]) -> List[NamedKey]:
+        """One entry per key, with the full names written in the same passages."""
         kinds: Dict[str, Counter] = defaultdict(Counter)
         texts: Dict[str, Counter] = defaultdict(Counter)
-        files: Dict[str, set] = defaultdict(set)
-        for row in cls._user_entities(user).values(
-            "key", "kind", "text", "mentions", "file_id"
-        ):
-            kinds[row["key"]][row["kind"]] += row["mentions"]
-            texts[row["key"]][row["text"]] += row["mentions"]
-            files[row["key"]].add(row["file_id"])
+        files: Dict[str, Set[int]] = defaultdict(set)
+        chunks: Dict[str, Set[int]] = defaultdict(set)
+        people_in: Dict[int, Set[str]] = defaultdict(set)
+        full: Dict[str, bool] = {}
+        for row in rows:
+            key = row["key"]
+            kinds[key][row["kind"]] += row["mentions"]
+            texts[key][row["text"]] += row["mentions"]
+            files[key].add(row["file_id"])
+            chunks[key].add(row["chunk_id"])
+            if key not in full:
+                full[key] = is_full_name(key)
+            if row["kind"] == "person" and full[key]:
+                people_in[row["chunk_id"]].add(key)
         return [
-            KeyStats(
+            NamedKey(
                 key=key,
                 text=texts[key].most_common(1)[0][0],
                 kind=kinds[key].most_common(1)[0][0],
                 weight=sum(kinds[key].values()),
                 files=frozenset(files[key]),
+                nearby=frozenset().union(*(people_in[c] for c in chunks[key])) - {key},
             )
             for key in sorted(kinds)
         ]
+
+    @classmethod
+    def _key_stats(cls, user) -> List[NamedKey]:
+        return cls._named_keys(
+            cls._user_entities(user)
+            .order_by()
+            .values("key", "kind", "text", "mentions", "file_id", "chunk_id")
+        )
 
     @classmethod
     @transaction.atomic
@@ -108,10 +126,7 @@ class EntityClusterService:
         by_block: Dict[str, EntityCluster] = {}
         for key in sorted(known):
             by_block.setdefault(blocking_key(key), known[key].cluster)
-        refused = {
-            (d.key_a, d.key_b)
-            for d in AliasDecision.objects.filter(user=user, same=False)
-        }
+        refused = cls._refused(user)
         created = 0
         for stats in cls._key_stats(user):
             if stats.key in known:
@@ -134,22 +149,35 @@ class EntityClusterService:
                 source=source,
             )
             created += 1
-        cls._apply_rule_merges(user, refused)
+        cls._apply_rule_merges(user, refused, rule_merges(cls._key_stats(user)))
         return created
 
-    @classmethod
-    def _apply_rule_merges(cls, user, refused) -> None:
-        stats = cls._key_stats(user)
-        merges = rule_merges(
-            NamedKey(item.key, item.text, item.kind, item.weight, item.files)
-            for item in stats
+    @staticmethod
+    def _refused(user) -> Set[Tuple[str, str]]:
+        return set(
+            AliasDecision.objects.filter(user=user, same=False).values_list(
+                "key_a", "key_b"
+            )
         )
+
+    @classmethod
+    def _apply_rule_merges(
+        cls,
+        user,
+        refused,
+        merges: Sequence[Tuple[str, str]],
+        scope: Optional[Set[str]] = None,
+    ) -> int:
+        """Merge each (short, owner) pair's clusters; returns how many merged."""
         owner_of = dict(
             ClusterAlias.objects.filter(user=user).values_list("key", "cluster_id")
         )
+        merged = 0
         for short, owner in merges:
             # Most rules are already applied, so only a real change touches the database.
             if short not in owner_of or owner not in owner_of:
+                continue
+            if scope is not None and short not in scope and owner not in scope:
                 continue
             if owner_of[short] == owner_of[owner]:
                 continue
@@ -159,9 +187,119 @@ class EntityClusterService:
                 continue
             dropped_id = drop.pk  # delete() clears the instance's pk.
             cls._absorb(keep, drop, AliasSource.RULE, None)
+            merged += 1
             owner_of.update(
                 {key: keep.pk for key, value in owner_of.items() if value == dropped_id}
             )
+        return merged
+
+    @classmethod
+    @transaction.atomic
+    def recheck(cls, user, file_ids: Sequence[int]) -> NameCheck:
+        """Re-score the names in these files and repair their clusters. Idempotent.
+
+        A membership only a name rule made, and the score no longer supports, is
+        split off; then the score's merges apply. Merges and separations the user
+        made, and the model check's verdicts, stay as they are. Nothing is paid
+        for: pairs scored in the middle wait for the model check at the next
+        relationships read.
+        """
+        get_user_model().objects.select_for_update().filter(pk=user.pk).first()
+        stats = cls._key_stats(user)
+        merges = rule_merges(stats)
+        scope = set(
+            cls._user_entities(user)
+            .filter(file_id__in=file_ids)
+            .values_list("key", flat=True)
+        )
+        separated = cls._split_unsupported(user, stats, merges, scope)
+        merged = cls._apply_rule_merges(user, cls._refused(user), merges, scope)
+        cls.refresh_labels(user)
+        return NameCheck(
+            merged=merged,
+            separated=separated,
+            review=len(cls.pending_candidates(user, file_ids)),
+        )
+
+    @classmethod
+    def _split_unsupported(
+        cls,
+        user,
+        stats: Sequence[NamedKey],
+        merges: Sequence[Tuple[str, str]],
+        scope: Set[str],
+    ) -> int:
+        """Split the person names in each cluster in scope into the parts their
+        evidence connects.
+
+        Evidence is a rule merge, a merge-level score, the same blocking key, or a
+        same-entity verdict (model or user). The part with the most full-name
+        mentions keeps the cluster, its other names and its relationships; each
+        other part becomes its own cluster. Other kinds of names are never split.
+        """
+        parent: Dict[str, str] = {}
+
+        def find(key: str) -> str:
+            parent.setdefault(key, key)
+            while parent[key] != key:
+                parent[key] = parent[parent[key]]
+                key = parent[key]
+            return key
+
+        def join(first: str, second: str) -> None:
+            parent[find(first)] = find(second)
+
+        for short, owner in [*merges, *merge_pairs(stats)]:
+            join(short, owner)
+        for key_a, key_b in AliasDecision.objects.filter(
+            user=user, same=True
+        ).values_list("key_a", "key_b"):
+            join(key_a, key_b)
+        weight = {item.key: item.weight for item in stats}
+        people = {item.key for item in stats if item.kind == "person"}
+        aliases = list(
+            ClusterAlias.objects.filter(user=user, key__in=weight).select_related(
+                "cluster"
+            )
+        )
+        by_block: Dict[str, str] = {}
+        for alias in aliases:
+            join(alias.key, by_block.setdefault(blocking_key(alias.key), alias.key))
+        by_cluster: Dict[int, List[ClusterAlias]] = defaultdict(list)
+        for alias in aliases:
+            by_cluster[alias.cluster_id].append(alias)
+        separated = 0
+        for members in by_cluster.values():
+            if not any(alias.key in scope for alias in members):
+                continue
+            parts: Dict[str, List[ClusterAlias]] = defaultdict(list)
+            for alias in members:
+                if alias.key in people:
+                    parts[find(alias.key)].append(alias)
+            if len(parts) < 2:
+                continue
+            ranked = sorted(
+                parts.values(),
+                key=lambda part: (
+                    -sum(weight[a.key] for a in part if is_full_name(a.key)),
+                    -sum(weight[a.key] for a in part),
+                    min(a.key for a in part),
+                ),
+            )
+            for part in ranked[1:]:
+                part.sort(key=lambda a: (-weight[a.key], a.key))
+                fresh = EntityCluster.objects.create(
+                    user=user, label=part[0].text, kind=part[0].cluster.kind
+                )
+                for index, alias in enumerate(part):
+                    alias.cluster = fresh
+                    alias.source = AliasSource.SELF if index == 0 else AliasSource.RULE
+                    alias.probability = None
+                ClusterAlias.objects.bulk_update(
+                    part, ["cluster", "source", "probability"]
+                )
+                separated += len(part)
+        return separated
 
     @staticmethod
     def _clusters_refused(refused, first, second) -> bool:
@@ -192,11 +330,7 @@ class EntityClusterService:
         changed = []
         for cluster in EntityCluster.objects.filter(user=user, id__in=aliases):
             members = [stats[key] for key in aliases[cluster.pk]]
-            label = clean_display(
-                display_name(
-                    [NamedKey(m.key, m.text, m.kind, m.weight) for m in members]
-                ).text
-            )[:200]
+            label = clean_display(display_name(members).text)[:200]
             kinds: Counter = Counter()
             for member in members:
                 kinds[member.kind] += member.weight
@@ -254,9 +388,12 @@ class EntityClusterService:
             )
         )
         defined = cls._defined_candidates(rows)
+        scored = review_pairs(
+            item for item in cls._named_keys(rows) if item.key in named
+        )
         pending = [
             candidate
-            for candidate in [*defined, *alias_candidates(named, non_person)]
+            for candidate in [*defined, *alias_candidates(named, non_person), *scored]
             if (candidate.key_a, candidate.key_b) not in decided
             and candidate.key_a in aliases
             and candidate.key_b in aliases

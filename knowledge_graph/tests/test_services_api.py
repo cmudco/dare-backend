@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from core.services.decisions_service import Answer, DecisionBatch
 from files.models import DocumentChunk, DocumentEntity, File, Folder
-from knowledge_graph.constants import GraphStatus, LabelSource
+from knowledge_graph.constants import AliasSource, GraphStatus, LabelSource
 from knowledge_graph.domain.relation_pairs import CandidatePair, PairMention
 from knowledge_graph.models import (
     AliasDecision,
@@ -516,3 +516,93 @@ class TenantIsolationTests(TestCase):
         self.api.force_authenticate(self.owner)
         response = self.api.post(f"/api/knowledge-graphs/{graph.id}/approve/")
         self.assertEqual(response.status_code, 400)
+
+
+class NameCheckTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(email="o@dare.test", password="x")
+        self.other = User.objects.create_user(email="s@dare.test", password="x")
+        self.file = make_file(
+            self.owner,
+            "pension.pdf",
+            "Frederick Brown, Fredk Brown, Paul Barnwell, Paul Fields and Paul.",
+            [
+                ("person", "frederick brown", "Frederick Brown"),
+                ("person", "fredk brown", "Fredk Brown"),
+                ("person", "paul barnwell", "Paul Barnwell"),
+                ("person", "paul fields", "Paul Fields"),
+                ("person", "paul", "Paul"),
+            ],
+        )
+        EntityClusterService.sync_user(self.owner)
+        # The state the old cut-offs left: Fredk apart, bare Paul inside Barnwell.
+        self.move("fredk brown", EntityCluster.objects.create(user=self.owner))
+        self.move("paul", self.cluster_of("paul barnwell"))
+        self.graph = KnowledgeGraph.objects.create(user=self.owner, name="G")
+        self.graph.files.set([self.file])
+        self.url = f"/api/knowledge-graphs/{self.graph.id}/recheck-names/"
+        self.api = APIClient()
+        starting = patch("knowledge_graph.api.views.enqueue", run_job_now)
+        starting.start()
+        self.addCleanup(starting.stop)
+
+    def move(self, key, cluster):
+        alias = ClusterAlias.objects.get(user=self.owner, key=key)
+        old = alias.cluster
+        alias.cluster, alias.source = cluster, AliasSource.RULE
+        alias.save()
+        if not old.aliases.exists():
+            old.delete()
+
+    def cluster_of(self, key):
+        return ClusterAlias.objects.get(user=self.owner, key=key).cluster
+
+    def recheck(self):
+        self.api.force_authenticate(self.owner)
+        self.assertEqual(self.api.post(self.url).status_code, 200)
+        return self.api.get(f"/api/knowledge-graphs/{self.graph.id}/").json()
+
+    def test_recheck_repairs_names_and_a_second_run_changes_nothing(self):
+        first = self.recheck()
+        self.assertEqual(first["status"], GraphStatus.READY_FREE)
+        self.assertEqual(
+            (first["nameCheck"]["merged"], first["nameCheck"]["separated"]), (1, 1)
+        )
+        self.assertEqual(
+            self.cluster_of("fredk brown"), self.cluster_of("frederick brown")
+        )
+        self.assertNotEqual(self.cluster_of("paul"), self.cluster_of("paul barnwell"))
+        clusters = EntityCluster.objects.filter(user=self.owner).count()
+        again = self.recheck()["nameCheck"]
+        self.assertEqual((again["merged"], again["separated"]), (0, 0))
+        self.assertEqual(
+            EntityCluster.objects.filter(user=self.owner).count(), clusters
+        )
+
+    def test_recheck_keeps_a_separation_the_user_made(self):
+        AliasDecision.objects.create(
+            user=self.owner,
+            key_a="frederick brown",
+            key_b="fredk brown",
+            same=False,
+            source=AliasSource.MANUAL,
+        )
+        self.recheck()
+        self.assertNotEqual(
+            self.cluster_of("fredk brown"), self.cluster_of("frederick brown")
+        )
+
+    def test_recheck_keeps_a_merge_the_user_made(self):
+        paul = self.cluster_of("paul")
+        EntityClusterService.separate(self.owner, paul, "paul")
+        EntityClusterService.merge(
+            self.owner, self.cluster_of("paul barnwell"), self.cluster_of("paul")
+        )
+        self.recheck()
+        self.assertEqual(self.cluster_of("paul"), self.cluster_of("paul barnwell"))
+
+    def test_recheck_needs_sign_in_and_the_owners_graph(self):
+        self.assertEqual(self.api.post(self.url).status_code, 401)
+        self.api.force_authenticate(self.other)
+        self.assertEqual(self.api.post(self.url).status_code, 404)
+        self.assertIsNone(KnowledgeGraph.objects.get(pk=self.graph.id).name_check)

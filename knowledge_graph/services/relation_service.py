@@ -4,7 +4,7 @@ import logging
 import re
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Dict, List, Literal, Mapping, Optional, Sequence, Set, Tuple
 
 from asgiref.sync import async_to_sync
@@ -757,6 +757,29 @@ class RelationBuildService:
     def mark_failed(graph_id: int, message: str) -> None:
         KnowledgeGraph.objects.filter(pk=graph_id).update(
             status=GraphStatus.FAILED, error=message[:300]
+        )
+
+    @staticmethod
+    def resting_status(graph: KnowledgeGraph) -> str:
+        """Where a name re-check returns the graph: the state it was resting in."""
+        if graph.status in (
+            GraphStatus.READY,
+            GraphStatus.READY_FREE,
+            GraphStatus.AWAITING_APPROVAL,
+        ):
+            return graph.status
+        return GraphStatus.READY if graph.built_at else GraphStatus.READY_FREE
+
+    @classmethod
+    def run_name_check(cls, graph_id: int, resting_status: str) -> None:
+        graph = KnowledgeGraph.objects.get(pk=graph_id)
+        result = EntityClusterService.recheck(
+            graph.user, list(graph.files.values_list("id", flat=True))
+        )
+        KnowledgeGraph.objects.filter(pk=graph_id).update(
+            status=resting_status,
+            error="",
+            name_check={**asdict(result), "checked_at": timezone.now().isoformat()},
         )
 
     @classmethod
