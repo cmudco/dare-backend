@@ -35,12 +35,18 @@ from knowledge_graph.services.graph_view_service import (
 from knowledge_graph.services.relation_service import RelationBuildService
 from knowledge_graph.tasks import (
     build_graph_relations,
+    check_graph_names,
     discover_graph_labels,
     prepare_graph,
 )
 from projects.services.project_service import selected_source_files
 
-BUSY_STATUSES = (GraphStatus.PREPARING, GraphStatus.DISCOVERING, GraphStatus.BUILDING)
+BUSY_STATUSES = (
+    GraphStatus.PREPARING,
+    GraphStatus.DISCOVERING,
+    GraphStatus.BUILDING,
+    GraphStatus.CHECKING_NAMES,
+)
 ASK_TOP_K = 4
 
 
@@ -243,6 +249,16 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
             build_graph_relations,
             body.validated_data["new_only"],
             new_files_only,
+        )
+
+    @action(detail=True, methods=["post"], url_path="recheck-names")
+    def recheck_names(self, request, pk=None):
+        graph = self._graph(pk)
+        return self._start(
+            graph,
+            GraphStatus.CHECKING_NAMES,
+            check_graph_names,
+            RelationBuildService.resting_status(graph),
         )
 
     @action(detail=True, methods=["post"], url_path="labels")

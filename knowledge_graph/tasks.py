@@ -6,6 +6,9 @@ BUILD_TIMEOUT_SECONDS = 3600
 FAILED_MESSAGE = (
     "This run stopped unexpectedly. Earlier relationships are unchanged. Try again."
 )
+NAME_CHECK_FAILED = (
+    "Re-checking names stopped unexpectedly. Names are unchanged. Try again."
+)
 
 
 @job("default", timeout=BUILD_TIMEOUT_SECONDS)
@@ -35,4 +38,13 @@ def build_graph_relations(
         RelationBuildService.run_build(graph_id, new_only, new_files_only)
     except Exception:
         RelationBuildService.mark_failed(graph_id, FAILED_MESSAGE)
+        raise
+
+
+@job("default", timeout=BUILD_TIMEOUT_SECONDS)
+def check_graph_names(graph_id: int, resting_status: str) -> None:
+    try:
+        RelationBuildService.run_name_check(graph_id, resting_status)
+    except Exception:
+        RelationBuildService.mark_failed(graph_id, NAME_CHECK_FAILED)
         raise

@@ -170,6 +170,36 @@ GLiNER does use server memory: about 1.7 GB on our test machine once loaded.
 The merge step only joins names that are clearly the same. A surname shared by two people stays
 apart, and **Separate** undoes any merge for good.
 
+**How two person names are scored.** Every pair of person names whose surnames sound alike gets one
+score from 0 to 1 (`knowledge_graph/domain/alias_rules.py`, where every threshold lives):
+
+```mermaid
+flowchart LR
+  A["Two names"] --> S["Score: first-name fit x surname fit<br/>+ shared document + same people nearby"]
+  S -->|"0.85 or more"| M["Merge, free"]
+  S -->|"0.6 to 0.85"| R["Model check at the next<br/>relationships read"]
+  S -->|"below 0.6"| K["Keep apart"]
+```
+
+- **First-name fit:** the same name (1.0), a short form such as "Fredk", "Wm" or "Jno" (0.85), the
+  start of the name such as "Benj" (0.8), or a close spelling such as Patty/Patsy. Different first
+  names or middle initials (Adam/Daniel, John A./John D.) score 0 and also block any chain of merges
+  that would join those two people.
+- **Surname fit:** the same surname (1.0), the same sound such as Heyward/Hayward (0.9), one
+  consonant apart such as Hayward/Haywood (0.75), or a very close spelling.
+- **Bonuses:** +0.1 when both names appear in one document, and up to +0.1 for the share of people
+  named in the same passages as both.
+
+Form labels and signature marks are not part of a name: "Paul Barnwell Deponent", "Frederick Brown
+P. O." and "Richard his x Hayward" score as Paul Barnwell, Frederick Brown and Richard Hayward. A bare
+name such as "Brown" joins a person only when one person with that name appears across its
+documents; mention counts never choose between people.
+
+**Re-check names** on a graph's page re-runs this for the graph's documents as a background job. It
+separates names that a name rule joined and the score no longer supports, then applies the score's
+merges. Merges and separations a user made, and the model check's verdicts, are kept. It is free and
+safe to run twice: the second run changes nothing.
+
 **Creating a graph** means choosing which files belong together. You can then explore their entities
 and see which ones are mentioned together.
 

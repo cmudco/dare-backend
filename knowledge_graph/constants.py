@@ -55,6 +55,7 @@ class GraphStatus(models.TextChoices):
     DISCOVERING = "discovering", "Finding relationship types"
     AWAITING_APPROVAL = "awaiting_approval", "Waiting for cost approval"
     BUILDING = "building", "Reading relationships"
+    CHECKING_NAMES = "checking_names", "Re-checking names"
     READY = "ready", "Relationships ready"
     FAILED = "failed", "Failed"
 

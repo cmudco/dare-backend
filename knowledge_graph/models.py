@@ -115,6 +115,11 @@ class KnowledgeGraph(TimeStampMixin):
     built_at = models.DateTimeField(null=True, blank=True)
     eval_report = models.JSONField(null=True, blank=True)
     proposed_types = models.JSONField(default=list, blank=True)
+    name_check = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Counts from the last name re-check: merged, separated, review.",
+    )
 
     class Meta:
         ordering = ["-created_at"]

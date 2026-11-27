@@ -8,7 +8,9 @@ from knowledge_graph.domain.alias_rules import (
     display_name,
     file_owners,
     generic_keys,
+    name_score,
     people_conflict,
+    review_pairs,
     rule_merges,
 )
 from knowledge_graph.domain.relation_pairs import (
@@ -148,15 +150,17 @@ class NameQualityTests(SimpleTestCase):
         self.assertFalse(people_conflict(["e howard hunt"], ["howard hunt"]))
         self.assertTrue(people_conflict(["wesley hunt"], ["howard hunt"]))
 
-    def test_surname_stays_apart_when_the_top_owner_misses_a_file(self):
+    def test_surname_with_two_owners_in_its_files_stays_apart_whatever_the_counts(
+        self,
+    ):
         keys = [
             NamedKey("fields", "Fields", "person", 9, frozenset({1, 2})),
             NamedKey("adam fields", "Adam Fields", "person", 90, frozenset({1, 2})),
             NamedKey("daniel fields", "Daniel Fields", "person", 5, frozenset({2})),
         ]
+        self.assertEqual(rule_merges(keys), [])
+        keys[0] = NamedKey("fields", "Fields", "person", 9, frozenset({1}))
         self.assertIn(("fields", "adam fields"), rule_merges(keys))
-        keys[1] = NamedKey("adam fields", "Adam Fields", "person", 90, frozenset({1}))
-        self.assertNotIn(("fields", "adam fields"), rule_merges(keys))
 
     def test_first_name_joins_the_person_it_starts_not_a_stray_surname(self):
         keys = [
@@ -164,7 +168,10 @@ class NameQualityTests(SimpleTestCase):
             NamedKey("alfred fripp", "Alfred Fripp", "person", 60, frozenset({1})),
             NamedKey("attest alfred", "Attest Alfred", "person", 1, frozenset({1})),
         ]
-        self.assertEqual(rule_merges(keys), [("alfred", "alfred fripp")])
+        self.assertEqual(
+            rule_merges(keys),
+            [("alfred", "alfred fripp"), ("attest alfred", "alfred fripp")],
+        )
 
     def test_one_word_name_in_a_file_goes_to_its_clear_owner(self):
         names = [
@@ -177,7 +184,7 @@ class NameQualityTests(SimpleTestCase):
             ("susan", 7, 31),
             ("susan mc quam", 8, 2),
         ]
-        self.assertEqual(file_owners(names), {"alfred": 2})
+        self.assertEqual(file_owners(names), {"alfred": 2, "attest alfred": 2})
 
     def test_chunk_can_define_an_abbreviation(self):
         text = "The Israeli Coordinator of Government Activities (COGAT) closed it."
@@ -189,6 +196,144 @@ class NameQualityTests(SimpleTestCase):
             defined_abbreviations(text, spellings),
             [("cogat", "coordinator of government activities")],
         )
+
+
+def _person(key, weight=1, files=frozenset({1})):
+    return NamedKey(key, key.title(), "person", weight, frozenset(files))
+
+
+class NameScoreTests(SimpleTestCase):
+    """The variants QA found in the Civil War pension files (#548)."""
+
+    def assertMerges(self, first, second):
+        self.assertGreaterEqual(name_score(_person(first), _person(second)), 0.85)
+
+    def assertApart(self, first, second):
+        self.assertLess(name_score(_person(first), _person(second)), 0.6)
+
+    def test_abbreviated_first_names_merge(self):
+        self.assertMerges("frederick brown", "fredk brown")
+        self.assertMerges("fred erick brown", "fred'k brown")
+        self.assertMerges("benjamin simmons", "benj simmons")
+        self.assertMerges("william lochren", "wm lochren")
+        self.assertMerges("john brown", "jno brown")
+
+    def test_first_name_split_by_a_line_break_merges(self):
+        self.assertMerges("frederick brown", "fred erick brown")
+
+    def test_form_labels_and_signature_marks_are_not_part_of_the_name(self):
+        self.assertMerges("frederick brown", "frederick brown p o")
+        self.assertMerges("paul barnwell", "paul barnwell deponent")
+        self.assertMerges("richard hayward", "richard his x hayward")
+        self.assertMerges("harry brown", "soldier harry brown")
+
+    def test_sound_alike_surnames_merge(self):
+        self.assertMerges("richard heyward", "richard hayward")
+        self.assertMerges("patty heyward", "patty hayward")
+        self.assertMerges("richard hayward", "richard haywood")
+        self.assertMerges("patty haywood", "patty hayward")
+
+    def test_one_consonant_apart_needs_a_shared_document(self):
+        first = _person("patty haywood", files={1})
+        self.assertLess(name_score(first, _person("patty hayward", files={2})), 0.85)
+        self.assertGreaterEqual(
+            name_score(first, _person("patty hayward", files={2})), 0.6
+        )
+
+    def test_people_named_in_the_same_passages_raise_the_score(self):
+        first = NamedKey(
+            "patty haywood", "", "person", 1, frozenset({1}), frozenset({"moses green"})
+        )
+        second = NamedKey(
+            "patty hayward", "", "person", 1, frozenset({2}), frozenset({"moses green"})
+        )
+        self.assertGreaterEqual(name_score(first, second), 0.85)
+
+    def test_different_first_names_with_one_surname_stay_apart(self):
+        self.assertApart("samuel brown", "adam brown")
+        self.assertApart("harry brown", "harvey brown")
+        self.assertApart("joseph simmons", "josiah simmons")
+        self.assertApart("bella brown", "della brown")
+        self.assertApart("ann brown", "anson brown")
+
+    def test_different_middle_initials_stay_apart(self):
+        self.assertApart("john a brown", "john d brown")
+
+    def test_different_surnames_stay_apart(self):
+        self.assertApart("john brown", "john bryan")
+        self.assertApart("john brown", "john barnes")
+
+    def test_middle_scores_go_to_review(self):
+        pairs = review_pairs(
+            [_person("patty haywood", files={1}), _person("patty hayward", files={2})]
+        )
+        self.assertEqual(
+            [(c.key_a, c.key_b, c.reason) for c in pairs],
+            [("patty hayward", "patty haywood", "score")],
+        )
+
+
+class PensionFileMergeTests(SimpleTestCase):
+    def test_variant_groups_become_one_person_each(self):
+        merges = rule_merges(
+            [
+                _person("frederick brown", 20),
+                _person("fredk brown", 5),
+                _person("fred erick brown", 2),
+                _person("frederick brown p o"),
+                _person("richard heyward", 9),
+                _person("richard hayward", 4),
+                _person("richard haywood", 2),
+                _person("benjamin simmons", 3),
+                _person("benj simmons", 6),
+            ]
+        )
+        self.assertCountEqual(
+            merges,
+            [
+                ("fredk brown", "frederick brown"),
+                ("fred erick brown", "frederick brown"),
+                ("frederick brown p o", "frederick brown"),
+                ("richard hayward", "richard heyward"),
+                ("richard haywood", "richard heyward"),
+                ("benjamin simmons", "benj simmons"),
+            ],
+        )
+
+    def test_bare_names_with_several_owners_in_their_files_stay_apart(self):
+        merges = rule_merges(
+            [
+                _person("brown", 40, {1, 2}),
+                _person("frederick brown", 90, {1}),
+                _person("samuel brown", 3, {1}),
+                _person("rebecca brown", 2, {2}),
+                _person("paul", 30, {1}),
+                _person("paul barnwell", 90, {1}),
+                _person("paul fields", 2, {1}),
+            ]
+        )
+        self.assertEqual(merges, [])
+
+    def test_bare_name_with_one_person_behind_its_spellings_merges(self):
+        merges = rule_merges(
+            [
+                _person("brown", 4),
+                _person("frederick brown", 9),
+                _person("fredk brown", 3),
+            ]
+        )
+        self.assertIn(("brown", "frederick brown"), merges)
+
+    def test_bridge_never_joins_two_people_whose_first_names_clash(self):
+        merges = rule_merges(
+            [
+                _person("al brown", 5),
+                _person("alfred brown", 9),
+                _person("albert brown", 8),
+            ]
+        )
+        self.assertNotIn(("albert brown", "alfred brown"), merges)
+        self.assertNotIn(("alfred brown", "albert brown"), merges)
 
 
 class CandidatePairTests(SimpleTestCase):
@@ -332,13 +477,21 @@ class RuleMergeTests(SimpleTestCase):
         ]
         self.assertEqual(rule_merges(keys), [])
 
-    def test_surname_goes_to_a_clearly_dominant_owner(self):
+    def test_surname_goes_to_the_one_owner_in_its_files(self):
+        keys = [
+            NamedKey("reagan", "Reagan", "person", 1, frozenset({1})),
+            NamedKey("ronald reagan", "Ronald Reagan", "person", 30, frozenset({1})),
+            NamedKey("nancy reagan", "Nancy Reagan", "person", 2, frozenset({2})),
+        ]
+        self.assertEqual(rule_merges(keys), [("reagan", "ronald reagan")])
+
+    def test_surname_is_not_given_to_the_most_mentioned_owner(self):
         keys = [
             self.person("reagan"),
             self.person("ronald reagan", 30),
             self.person("nancy reagan", 2),
         ]
-        self.assertEqual(rule_merges(keys), [("reagan", "ronald reagan")])
+        self.assertEqual(rule_merges(keys), [])
 
     def test_middle_initial_and_spelling_variants_are_one_person(self):
         merges = rule_merges(
@@ -353,7 +506,14 @@ class RuleMergeTests(SimpleTestCase):
         self.assertIn(
             ("casper weinberger", "caspar weinberger"),
             rule_merges(
-                [self.person("caspar weinberger", 2), self.person("casper weinberger")]
+                [
+                    NamedKey(
+                        "caspar weinberger", "Caspar", "person", 2, frozenset({1})
+                    ),
+                    NamedKey(
+                        "casper weinberger", "Casper", "person", 1, frozenset({1})
+                    ),
+                ]
             ),
         )
 

@@ -140,6 +140,16 @@ class GraphViewService:
             "proposed_types": [
                 item for item in graph.proposed_types if item["name"] not in accepted
             ],
+            "name_check": (
+                {
+                    "merged": graph.name_check["merged"],
+                    "separated": graph.name_check["separated"],
+                    "review": graph.name_check["review"],
+                    "checked_at": graph.name_check["checked_at"],
+                }
+                if graph.name_check
+                else None
+            ),
         }
 
     @staticmethod
